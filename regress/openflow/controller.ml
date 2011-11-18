@@ -17,6 +17,7 @@
 
 open Lwt
 open Printf
+open GC
 
 let resolve t = Lwt.on_success t (fun _ -> ())
 

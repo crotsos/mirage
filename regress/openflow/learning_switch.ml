@@ -4,6 +4,7 @@
 open Lwt
 open Printf
 let resolve t = Lwt.on_success t (fun _ -> ())
+open Gc
 
 module OP = Openflow.Ofpacket
 module OC = Openflow.Controller
