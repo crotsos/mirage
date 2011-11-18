@@ -21,11 +21,12 @@ type mac_switch = {
 
 type switch_state = {
   mutable mac_cache: (mac_switch, OP.Port.t) Hashtbl.t;
-  mutable dpid: OP.datapath_id list
+  mutable dpid: OP.datapath_id list;
+  log: out_channel;
 }
 
 let switch_data = { mac_cache = Hashtbl.create 0; 
-                    dpid = [] 
+                    dpid = []; log=(open_out "mirage-delay.txt");
                   } 
 
 
@@ -38,8 +39,12 @@ let datapath_join_cb controller dpid evt =
   switch_data.dpid <- switch_data.dpid @ [dp];
   pp "+ datapath:0x%012Lx\n" dp
 
+let req_count = (ref 0)
+
 let packet_in_cb controller dpid evt =
-  OS.Console.log (sp "* dpid:0x%012Lx evt:%s" dpid (OE.string_of_event evt));
+incr req_count;
+let ts = (OS.Clock.time () ) in 
+(*   OS.Console.log (sp "* dpid:0x%012Lx evt:%s" dpid (OE.string_of_event evt)); *)
   let (in_port, buffer_id, data, dp) = 
     match evt with
       | OE.Packet_in (inp, buf, dat, dp) -> (inp, buf, dat, dp)
@@ -50,7 +55,7 @@ let packet_in_cb controller dpid evt =
   let m = OP.Match.parse_from_raw_packet in_port data in 
 
   (* save src mac address *)
-  let ix = {addr= (OP.Match.get_dl_src m); switch=dpid} in
+  let ix = {addr= (OP.Match.get_dl_src m); switch=dpid;} in
   if not (Hashtbl.mem switch_data.mac_cache ix ) then
     (Hashtbl.add switch_data.mac_cache ix in_port)
   else 
@@ -58,7 +63,7 @@ let packet_in_cb controller dpid evt =
 
   (* check if I know the output port in order to define what type of message
    * we need to send *)
-  let ix = {addr= (OP.Match.get_dl_dst m); switch=dpid} in
+  let ix = {addr= (OP.Match.get_dl_dst m); switch=dpid;} in
   if ( (OP.eaddr_is_broadcast ix.addr)
        || (not (Hashtbl.mem switch_data.mac_cache ix)) ) 
   then (
@@ -67,7 +72,9 @@ let packet_in_cb controller dpid evt =
       ~data:data ~in_port:in_port () 
     in
     let bs = OP.Packet_out.packet_out_to_bitstring pkt in 
-    resolve (OC.send_of_data controller dpid bs)
+    resolve (OC.send_of_data controller dpid bs);
+(*     Printf.fprintf switch_data.log "%d %f\n" (!req_count) (((OS.Clock.time ()) -. ts)*.1000000.0) *)
+    ()
   ) else (
     let out_port = (Hashtbl.find switch_data.mac_cache ix) in
     let actions = [| OP.Flow.Output(out_port, 2000) |] in
@@ -76,7 +83,10 @@ let packet_in_cb controller dpid evt =
                 actions () in 
     let bs = OP.Flow_mod.flow_mod_to_bitstring pkt in
     resolve (OC.send_of_data controller dpid bs);
-    printf "%s\n" (OP.Match.match_to_string m)
+(*     Printf.fprintf switch_data.log "%d %f\n" (!req_count) (((OS.Clock.time ()) -. ts)*.1000000.0); *)
+()
+(*;
+    printf "%s\n" (OP.Match.match_to_string m)*)
   )
 
 let init controller = 
@@ -89,7 +99,7 @@ let main () =
   Log.info "OF Controller" "starting controller";
   Net.Manager.create (fun mgr interface id ->
     let port = 6633 in 
-    OC.listen mgr (None, port) init
-    >> return (Log.info "OF Controller" "done!")
+    OC.listen mgr (None, port) init;
+    return (Log.info "OF Controller" "done!")
   )
 
