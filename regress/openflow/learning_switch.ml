@@ -84,11 +84,9 @@ let ts = (OS.Clock.time () ) in
                 actions () in 
     let bs = OP.Flow_mod.flow_mod_to_bitstring pkt in
     resolve (OC.send_of_data controller dpid bs);
-(*     Printf.fprintf switch_data.log "%d %f\n" (!req_count) (((OS.Clock.time ()) -. ts)*.1000000.0); *)
-()
-(*;
-    printf "%s\n" (OP.Match.match_to_string m)*)
+    ()
   )
+
 
 let init controller = 
   pp "test controller register datapath cb\n";
@@ -98,9 +96,16 @@ let init controller =
 
 let main () =
   Log.info "OF Controller" "starting controller";
+(*   Gc.set { (Gc.get()) with Gc.verbose = 0x00d }; *)
+(*
+  Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
+  Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
+  Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
+  Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
+  Gc.set { (Gc.get()) with Gc.space_overhead = 200 };
+*)
   Net.Manager.create (fun mgr interface id ->
     let port = 6633 in 
-    OC.listen mgr (None, port) init;
-    return (Log.info "OF Controller" "done!")
+    OC.listen mgr (None, port) init  
   )
 
