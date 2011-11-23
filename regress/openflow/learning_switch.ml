@@ -3,8 +3,9 @@
 
 open Lwt
 open Printf
-let resolve t = Lwt.on_success t (fun _ -> ())
 open Gc
+
+let resolve t = Lwt.on_success t (fun _ -> ())
 
 module OP = Openflow.Ofpacket
 module OC = Openflow.Controller
@@ -24,10 +25,13 @@ type switch_state = {
   mutable mac_cache: (mac_switch, OP.Port.t) Hashtbl.t;
   mutable dpid: OP.datapath_id list;
   log: out_channel;
+  mutable of_ctrl: OC.state list; 
 }
 
 let switch_data = { mac_cache = Hashtbl.create 0; 
-                    dpid = []; log=(open_out "mirage-delay.txt");
+                    dpid = []; 
+                    log=(open_out "mirage-delay.txt");
+                    of_ctrl = [];
                   } 
 
 
@@ -87,25 +91,44 @@ let ts = (OS.Clock.time () ) in
     ()
   )
 
+let memory_debug () = 
+   while_lwt true do
+     (OS.Time.sleep 1.0)  >> 
+     return (OC.mem_dbg "memory usage")
+   done 
+
+let terminate_controller controller =
+  while_lwt true do
+    (OS.Time.sleep 60.0)  >>
+    exit(1) 
+(*    return (List.iter (fun ctrl -> Printf.printf "terminating\n%!";
+ *    (OC.terminate ctrl))  *)
+(*    switch_data.of_ctrl)  *)
+  done
 
 let init controller = 
+  if (not (List.mem controller switch_data.of_ctrl)) then
+    switch_data.of_ctrl <- (([controller] @ switch_data.of_ctrl));
   pp "test controller register datapath cb\n";
   OC.register_cb controller OE.DATAPATH_JOIN datapath_join_cb;
   pp "test controller register packet_in cb\n";
   OC.register_cb controller OE.PACKET_IN packet_in_cb
 
+
 let main () =
-  Log.info "OF Controller" "starting controller";
-(*   Gc.set { (Gc.get()) with Gc.verbose = 0x00d }; *)
-(*
   Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
   Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
   Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
   Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
   Gc.set { (Gc.get()) with Gc.space_overhead = 200 };
-*)
-  Net.Manager.create (fun mgr interface id ->
-    let port = 6633 in 
-    OC.listen mgr (None, port) init  
-  )
-
+  
+  Log.info "OF Controller" "starting controller";
+  let t1 = Net.Manager.create (fun mgr interface id ->
+    let port = 6633 in
+    let t1 = (OC.listen mgr (None, port) init) in 
+    let t2 = (terminate_controller mgr) in 
+    t1 <&> t2 >> return (Log.info "OF Controller" "done!"))
+    in 
+    let t2 = terminate_controller () in
+(*     let t3 = memory_debug () in  *)
+    t2 <&> t1 (* <&> t3 *)
