@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -53,6 +54,9 @@ setreuseaddr(int fd)
   int o = 1;
   if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &o, sizeof o) < 0)
     err(1, "setsockopt: reuseaddr");
+
+//  if (setsockopt(fd, SOL_SOCKET, TCP_NODELAY, &o, sizeof o) < 0)
+//    err(1, "setsockopt: reuseaddr");
 } 
  
 CAMLprim value
@@ -174,6 +178,16 @@ caml_socket_listen(value v_socket)
   CAMLreturn(v_ret);
 }
 
+static void
+set_no_delay(int fd) {
+  int i = 1;
+
+  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &i, sizeof(int)) == -1)
+    err(1, "setsockopt");
+/*  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &i, sizeof(int)) == -1)
+        err(1, "setsockopt"); v */
+}
+
 CAMLprim value
 caml_tcpv4_accept(value v_fd)
 {
@@ -182,7 +196,7 @@ caml_tcpv4_accept(value v_fd)
   int r, fd=Int_val(v_fd);
   struct sockaddr_in sa;
   socklen_t len = sizeof sa;
-  r = accept(fd, (struct sockaddr *)&sa, &len);
+  r = accept(fd, (struct sockaddr *)&sa, &len);  
   if (r < 0) {
     if (errno == EWOULDBLOCK || errno == EAGAIN)
       Val_WouldBlock(v_ret);
@@ -192,6 +206,8 @@ caml_tcpv4_accept(value v_fd)
     }
   } else {
     setnonblock(r);
+
+    set_no_delay(r);
     v_ip = caml_copy_int32(ntohl(sa.sin_addr.s_addr));
     v_ca = caml_alloc(3,0);
     Store_field(v_ca, 0, Val_int(r));
