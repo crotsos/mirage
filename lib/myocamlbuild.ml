@@ -25,7 +25,7 @@ let ps = Printf.sprintf
 let ep = Printf.eprintf
 
 let debug = false
-let profiling = true
+let profiling = false (* true *)
 let native_p4 = true (* In case you have problems with natdynlink, set this to false *)
 
 module Spec = struct
@@ -289,7 +289,7 @@ let _ = dispatch begin function
      flag ["c"; "compile"] & S CC.cc_cflags;
      flag ["asm"; "compile"] & S [A "-D__ASSEMBLY__"];
      if profiling then
-       flag ["c"; "compile"] & S [A"-pg"];
+       flag ["c"; "compile"] & S [ (*A"-pg"*) ] ;
 
      (* xen code needs special cflags *)
      flag ["c"; "compile"; "include_xen"] & S CC.xen_incs;
