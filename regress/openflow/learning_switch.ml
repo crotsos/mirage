@@ -24,13 +24,11 @@ type mac_switch = {
 type switch_state = {
   mutable mac_cache: (mac_switch, OP.Port.t) Hashtbl.t;
   mutable dpid: OP.datapath_id list;
-  log: out_channel;
   mutable of_ctrl: OC.state list; 
 }
 
 let switch_data = { mac_cache = Hashtbl.create 0; 
                     dpid = []; 
-                    log=(open_out "mirage-delay.txt");
                     of_ctrl = [];
                   } 
 
@@ -97,14 +95,14 @@ let memory_debug () =
      return (OC.mem_dbg "memory usage")
    done 
 
-let terminate_controller controller =
+(*let terminate_controller controller =
   while_lwt true do
     (OS.Time.sleep 60.0)  >>
-    exit(1) 
+    exit(1) *)
 (*    return (List.iter (fun ctrl -> Printf.printf "terminating\n%!";
  *    (OC.terminate ctrl))  *)
 (*    switch_data.of_ctrl)  *)
-  done
+(*   done *)
 
 let init controller = 
   if (not (List.mem controller switch_data.of_ctrl)) then
@@ -114,21 +112,20 @@ let init controller =
   pp "test controller register packet_in cb\n";
   OC.register_cb controller OE.PACKET_IN packet_in_cb
 
-
 let main () =
-  Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
+(*  Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
   Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
   Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
   Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
-  Gc.set { (Gc.get()) with Gc.space_overhead = 200 };
-  
+  Gc.set { (Gc.get()) with Gc.space_overhead = 200 };*)
   Log.info "OF Controller" "starting controller";
   let t1 = Net.Manager.create (fun mgr interface id ->
+    Net.Manager.configure interface (`DHCP);
+ 
     let port = 6633 in
     let t1 = (OC.listen mgr (None, port) init) in 
-    let t2 = (terminate_controller mgr) in 
-    t1 <&> t2 >> return (Log.info "OF Controller" "done!"))
+    t1 >> return (Log.info "OF Controller" "done!"))
     in 
-    let t2 = terminate_controller () in
+(*     let t2 = terminate_controller () in *)
 (*     let t3 = memory_debug () in  *)
-    t2 <&> t1 (* <&> t3 *)
+    t1 (* <&> t3 *)
