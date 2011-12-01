@@ -54,6 +54,14 @@ let datapath_join_cb controller dpid evt =
   switch_data.dpid <- switch_data.dpid @ [dp];
   Log.info "OF Controller" "+ datapath:0x%012Lx\n" dp
 
+let datapath_leave_cb controller dpid evt =
+  let dp = match evt with
+    | OE.Datapath_leave c -> c
+    | _ -> invalid_arg "bogus datapath_leave event match!"
+  in
+  Log.info "OF Controller" "+ datapath:0x%012Lx\n" dp
+
+
 let packet_in_cb controller dpid evt =
   Log.info "OF Controller" 
     "dpid:0x%012Lx evt:%s" dpid (OE.string_of_event evt);
@@ -103,7 +111,9 @@ let packet_in_cb controller dpid evt =
 let init controller = 
   Log.info "OF Controller" "register datapath cb";
   OC.register_cb controller OE.DATAPATH_JOIN datapath_join_cb;
-  Log.info "OF Controller" "register packet_in cb\n";
+  Log.info "OF Controller" "register leave datapath cb";
+  OC.register_cb controller OE.DATAPATH_LEAVE datapath_leave_cb;
+   Log.info "OF Controller" "register packet_in cb\n";
   OC.register_cb controller OE.PACKET_IN packet_in_cb
 
 let main () =
