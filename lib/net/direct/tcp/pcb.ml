@@ -65,9 +65,11 @@ module Tx = struct
     let ack = match rx_ack with Some _ -> true |None -> false in
     let ack_number = match rx_ack with Some n -> Sequence.to_int32 n |None -> 0l in
     let sequence = Sequence.to_int32 seq in
+(*
     printf "TCP xmit: dest_ip=%s %s%s%s%sseq=%lu ack=%lu\n%!" (ipv4_addr_to_string dest_ip)
       (if rst then "RST " else "") (if syn then "SYN " else "")
       (if fin then "FIN " else "") (if ack then "ACK " else "") sequence ack_number; 
+*)
     let options = Options.marshal options in
     let data_offset = (Bitstring.bitstring_length options + 160) / 32 in
     let header = BITSTRING {
