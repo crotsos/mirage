@@ -113,9 +113,9 @@ let init controller =
   OC.register_cb controller OE.PACKET_IN packet_in_cb
 
 let main () =
-(*  Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
-  Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
-  Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
+(*  Gc.set { (Gc.get()) with Gc.minor_heap_size = 256000000 };
+  Gc.set { (Gc.get()) with Gc.major_heap_increment = 256000000 };
+  Gc.set { (Gc.get()) with Gc.stack_limit = 256000000 };
   Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
   Gc.set { (Gc.get()) with Gc.space_overhead = 200 };*)
   Log.info "OF Controller" "starting controller";

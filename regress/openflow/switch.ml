@@ -38,7 +38,7 @@ let init controller sw =
                             OS.add_port sw mgr interface; 
                             return ()
   );
-                              return ()
+  return ()
 
 
 let ip = Net.Nettypes.(
