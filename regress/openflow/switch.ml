@@ -28,7 +28,7 @@ let pp = Printf.printf
 let sp = Printf.sprintf
 
 let init controller sw =
-
+    Printf.printf "Adding new network devices";
   (* This is not correct as in the next connection this will fail *)
   Net.Manager.create_raw (fun mgr interface id ->
                             OS.add_port sw mgr interface;
