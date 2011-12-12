@@ -94,7 +94,7 @@ let packet_in_cb controller dpid evt =
       then (
         let pkt = (OP.Packet_out.create
                      ~buffer_id:buffer_id
-                     ~actions:[| OP.Flow.Output(OP.Port.All, 2000) |] 
+                     ~actions:[ OP.Flow.Output(OP.Port.All, 2000) ] 
                      ~data:data ~in_port:in_port () ) in
           resolve (OC.send_of_data controller dpid
                      (OP.Packet_out.packet_out_to_bitstring pkt))

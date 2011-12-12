@@ -17,6 +17,7 @@
 open Lwt 
 open Printf
 open OS.Clock
+open Gc
 
 type stats = {
   mutable bytes: int64;
@@ -27,16 +28,16 @@ type stats = {
 }
 
 let ip = Net.Nettypes.(
-  (ipv4_addr_of_tuple (10l,0l,0l,1l),
+  (ipv4_addr_of_tuple (10l,0l,0l,2l),
    ipv4_addr_of_tuple (255l,255l,255l,0l),
-   [ ipv4_addr_of_tuple (10l,0l,0l,1l) ]
+   [ ipv4_addr_of_tuple (10l,0l,0l,2l) ]
   ))
-
 
 let port = 5001
 
 let print_data st ts_now = 
-  Printf.printf "%f %Ld Kbps%!\n" ts_now (Int64.div st.bin_bytes 1000L); 
+  Printf.printf ">>>>>>>>>>>>>>>> %f %Ld KBytes/s  totbytes = %Ld  live_words = %d\n%!" ts_now
+    (Int64.div st.bin_bytes 1000L) st.bytes Gc.((stat()).live_words); 
   st.last_time <- ts_now;
   st.bin_bytes <- 0L;
   st.bin_packets <- 0L 
@@ -44,29 +45,28 @@ let print_data st ts_now =
 let iperf (dip,dpt) chan =
   Log.info "tcp_iperf" "connected";
   let st = {bytes=0L; packets=0L; bin_bytes=0L; bin_packets=0L; last_time =
-    (OS.Clock.time ())} in 
+    (OS.Clock.time ())} in
   try_lwt
     while_lwt true do
       lwt data = (Net.Channel.read_some chan) in
-      st.bytes <- (Int64.add st.bytes (Int64.of_int (Bitstring.bitstring_length data)));
+      st.bytes <- (Int64.add st.bytes (Int64.of_int ((Bitstring.bitstring_length data) / 8)));
       st.packets <- (Int64.add st.packets 1L);
-      st.bin_bytes <- (Int64.add st.bin_bytes (Int64.of_int (Bitstring.bitstring_length data)));
+      st.bin_bytes <- (Int64.add st.bin_bytes (Int64.of_int ((Bitstring.bitstring_length data) / 8)));
       st.bin_packets <- (Int64.add st.bin_packets 1L);
       let ts_now = (OS.Clock.time ()) in 
-      if ((ts_now -. st.last_time) >= 1.0) then
+      if ((ts_now -. st.last_time) >= 1.0) then begin
         print_data st ts_now;
+      end;
 
-      return () (* Printf.printf "%f reading %ld\n%!" (OS.Clock.time ())
-st.bytes) *)
+      return () 
     done
   with Net.Nettypes.Closed -> return (Log.info "Echo" "closed!")
 
 let main () =
   Log.info "Echo" "starting server";
   Net.Manager.create (fun mgr interface id ->
-    Net.Manager.configure interface (`IPv4 ip);
+(*    Net.Manager.configure interface (`IPv4 ip); *)
+    Net.Manager.configure interface (`DHCP);
     Net.Channel.listen mgr (`TCPv4 ((None, port), iperf))
     >> return (Log.info "Channel_echo" "done!")
   )
-
-

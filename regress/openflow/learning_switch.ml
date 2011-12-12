@@ -71,7 +71,7 @@ let ts = (OS.Clock.time () ) in
        || (not (Hashtbl.mem switch_data.mac_cache ix)) ) 
   then (
     let pkt = OP.Packet_out.create
-      ~buffer_id:buffer_id ~actions:[| OP.(Flow.Output(Port.All , 2000)) |] 
+      ~buffer_id:buffer_id ~actions:[ OP.(Flow.Output(Port.All , 2000))] 
       ~data:data ~in_port:in_port () 
     in
     let bs = OP.Packet_out.packet_out_to_bitstring pkt in 
@@ -80,7 +80,7 @@ let ts = (OS.Clock.time () ) in
     ()
   ) else (
     let out_port = (Hashtbl.find switch_data.mac_cache ix) in
-    let actions = [| OP.Flow.Output(out_port, 2000) |] in
+    let actions = [OP.Flow.Output(out_port, 2000)] in
     let pkt = OP.Flow_mod.create m 0_L OP.Flow_mod.ADD 
                 ~buffer_id:(Int32.to_int buffer_id)
                 actions () in 
@@ -122,7 +122,7 @@ let main () =
   let t1 = Net.Manager.create (fun mgr interface id ->
     Net.Manager.configure interface (`DHCP);
  
-    let port = 6633 in
+    let port = 6634 in
     let t1 = (OC.listen mgr (None, port) init) in 
     t1 >> return (Log.info "OF Controller" "done!"))
     in 
