@@ -35,6 +35,7 @@ val configure: interface -> config -> unit Lwt.t
  
 val create : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
 val create_raw : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
+val create_xen_switch : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
 val intercept : interface -> (string -> string * int * int  -> unit Lwt.t) -> unit
 val send_raw: t -> id -> (Bitstring.t list)  -> unit Lwt.t
 

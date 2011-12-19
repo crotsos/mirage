@@ -118,6 +118,11 @@ let plug_raw t id vif =
     printf "Manager: plug_raw done, to listener\n%!";
     t.listener t i id
 
+let plug_xen_switch t id vif =
+  if ((int_of_string id) == 0) then
+    plug t id vif
+  else
+    plug_raw t id vif 
 
 (* Unplug a network interface and cancel all its threads. *)
 let unplug t id =
@@ -142,6 +147,21 @@ let create listener =
                         Hashtbl.iter (fun id _ -> unplug t id) listeners);
     printf "Manager: init done\n%!";
     th
+
+(* Really ugly hack, kids don't ry this at home  *)
+let create_xen_switch listener =
+  printf "Manager: create\n%!";
+  let listeners = Hashtbl.create 1 in
+  let t = { listener; listeners } in
+  let _ = OS.Netif.create (plug_xen_switch t) in
+  (*  let _ = OS.Netif.create (plug t) in *)
+  let th,_ = Lwt.task () in
+    Lwt.on_cancel th (fun _ ->
+                        printf "Manager: cancel\n%!";
+                        Hashtbl.iter (fun id _ -> unplug t id) listeners);
+    printf "Manager: init done\n%!";
+    th
+
 
 (* This is a function that will create a set of interface which will allow
  the creation of net devices on which we are able to intercept packets 

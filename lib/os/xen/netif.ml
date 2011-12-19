@@ -76,6 +76,7 @@ type features = {
 }
 
 type t = {
+  id: string;
   backend_id: int;
   backend: string;
   mac: string;
@@ -136,7 +137,7 @@ let plug id =
     features.sg features.gso_tcpv4 features.rx_copy features.rx_flip features.smart_poll);
   Evtchn.unmask evtchn;
   (* Register callback activation *)
-  let t = { backend_id; tx_fring; tx_gnt; rx_gnt; rx_fring; rx_map;
+  let t = { id; backend_id; tx_fring; tx_gnt; rx_gnt; rx_fring; rx_map;
     evtchn; mac; backend; features } in
   Hashtbl.add devices id t;
   return t
@@ -266,4 +267,4 @@ let mac nf =
 
 (* The Xenstore MAC address is colon separated, very helpfully *)
 let ethid t = 
-  string_of_int t.backend_id
+  t.id
