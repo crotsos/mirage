@@ -62,15 +62,17 @@ let ts = (OS.Clock.time () ) in
   (* Parse Ethernet header *)
   let m = OP.Match.parse_from_raw_packet in_port data in 
 
+(*
   let pkt = OP.Packet_out.create
   ~buffer_id:buffer_id ~actions:[ OP.(Flow.Output(Port.All , 2000))] 
   ~data:data ~in_port:in_port () 
   in
   let bs = OP.Packet_out.packet_out_to_bitstring pkt in 
   OC.send_of_data controller dpid bs
-
+*)
     (* save src mac address *)
 (*   let ix = {addr= m.OP.Match.dl_src; switch=dpid;} in *)
+
 (*
   let ix = m.OP.Match.dl_src in
   add_entry_in_hashtbl switch_data.mac_cache ix in_port;
@@ -81,7 +83,7 @@ let ts = (OS.Clock.time () ) in
 (*   let ix = {addr= (OP.Match.get_dl_dst m); switch=dpid;} in *)
 
 
-(* let ix = m.OP.Match.dl_dst in
+ let ix = m.OP.Match.dl_dst in
   if ( (OP.eaddr_is_broadcast ix)
        || (not (Hashtbl.mem switch_data.mac_cache ix)) ) 
   then (
@@ -100,7 +102,7 @@ let ts = (OS.Clock.time () ) in
                 actions () in 
     let bs = OP.Flow_mod.flow_mod_to_bitstring pkt in
     OC.send_of_data controller dpid bs
-  )*)
+ )
 
 
 let memory_debug () = 
@@ -133,20 +135,21 @@ let ip = Net.Nettypes.(
     ))
 
 let main () =
-    Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
+(*    Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
     Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
     Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
     Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
-    Gc.set { (Gc.get()) with Gc.space_overhead = 200 };
+    Gc.set { (Gc.get()) with Gc.space_overhead = 200 };*)
 
     Log.info "OF Controller" "starting controller";
     let t1 = Net.Manager.create (fun mgr interface id ->
-        Net.Manager.configure interface (`IPv4 ip); 
+(*         Net.Manager.configure interface (`IPv4 ip);  *)
+         Net.Manager.configure interface (`DHCP);  
 
         let port = 6633 in
         let t1 = (OC.listen mgr (None, port) init) in 
         t1 >> return (Log.info "OF Controller" "done!"))
         in 
         (*     let t2 = terminate_controller () in *)
-        let t3 = memory_debug () in  
-        t2  <&> t3 
+(*         let t3 = memory_debug () in   *)
+        t1  (* <&> t3  *)
