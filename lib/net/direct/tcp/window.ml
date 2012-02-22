@@ -23,7 +23,6 @@ type t = {
   mutable tx_nxt: Sequence.t;
   mutable rx_nxt: Sequence.t;
   mutable rx_nxt_inseq: Sequence.t;
-  mutable rx_nxt_lastack: Sequence.t;
   mutable tx_wnd: int32;           (* TX Window size after scaling *)
   mutable rx_wnd: int32;           (* RX Window size after scaling *)
   mutable tx_wnd_scale: int;       (* TX Window scaling option     *)
@@ -35,10 +34,22 @@ type t = {
   mutable cwnd: int32;             (* congestion window *)
   mutable fast_recovery: bool;     (* flag to mark if this tcp is in
 				      fast recovery *)
+
+  mutable rtt_timer_on: bool;
+  mutable rtt_timer_reset: bool;
+  mutable rtt_timer_seq: Sequence.t;
+  mutable rtt_timer_starttime: float;
+  mutable srtt: float;
+  mutable rttvar: float;
+  mutable rto: float;
+  mutable backoff_count: int;
 }
 
 let default_mss = 536
 let max_mss = 1460
+
+let alpha = 0.125  (* see RFC 2988 *)
+let beta = 0.25    (* see RFC 2988 *)
 
 (* To string for debugging *)
 let to_string t =
@@ -54,7 +65,6 @@ let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss =
   let tx_nxt = Sequence.of_int32 7l in
   let rx_nxt = Sequence.(incr rx_isn) in
   let rx_nxt_inseq = Sequence.(incr rx_isn) in
-  let rx_nxt_lastack = Sequence.(incr rx_isn) in
   (* TODO: improve this sanity check of tx_mss *)
   let tx_mss = match tx_mss with |None -> default_mss |Some mss -> min mss max_mss in
   let snd_una = tx_nxt in
@@ -65,8 +75,18 @@ let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss =
   let ssthresh = tx_wnd in
   let cwnd = Int32.of_int (tx_mss * 2) in
   let fast_recovery = false in
-  { snd_una; tx_nxt; tx_wnd; rx_nxt; rx_nxt_inseq; rx_nxt_lastack; rx_wnd; tx_wnd_scale; rx_wnd_scale;
-    ssthresh; cwnd; tx_mss; fast_recovery }
+  let rtt_timer_on = false in
+  let rtt_timer_reset = true in
+  let rtt_timer_seq = tx_nxt in
+  let rtt_timer_starttime = 0.0 in
+  let srtt = 1.0 in
+  let rttvar = 0.0 in
+  let rto = 3.0 in
+  let backoff_count = 0 in
+  { snd_una; tx_nxt; tx_wnd; rx_nxt; rx_nxt_inseq; rx_wnd; tx_wnd_scale; rx_wnd_scale;
+    ssthresh; cwnd; tx_mss; fast_recovery;
+    rtt_timer_on; rtt_timer_reset;
+    rtt_timer_seq; rtt_timer_starttime; srtt; rttvar; rto; backoff_count }
 
 (* Check if a sequence number is in the right range
    TODO: modulo 32 for wrap
@@ -91,12 +111,8 @@ let rx_advance_inseq t b =
 
 (* Next expected receive sequence number *)
 let rx_nxt t = t.rx_nxt 
-let rx_nxt_set_lastack t = t.rx_nxt_lastack <- t.rx_nxt; t.rx_nxt 
 let rx_nxt_inseq t = t.rx_nxt_inseq
 let rx_wnd t = t.rx_wnd
-
-(* Check if there is pending data for which an ack has to be sent *)
-let rx_pending_ack t = t.rx_nxt_lastack <> t.rx_nxt
 
 (* TODO: scale the window down so we can advertise it correctly with
    window scaling on the wire *)
@@ -114,13 +130,19 @@ let tx_mss t =
 
 (* Advance transmitted packet sequence number *)
 let tx_advance t b =
+  if not t.rtt_timer_on && not t.fast_recovery then begin
+    t.rtt_timer_on <- true;
+    t.rtt_timer_seq <- t.tx_nxt;
+    t.rtt_timer_starttime <- OS.Clock.time ();
+  end;
   t.tx_nxt <- Sequence.add t.tx_nxt (Sequence.of_int b)
 
 (* An ACK was received - use it to adjust cwnd *)
-let tx_ack t r =
+let tx_ack t r win =
+  set_tx_wnd t win;
   if t.fast_recovery then begin
     if Sequence.gt r t.snd_una then begin
-      printf "EXITING fast recovery\n%!";
+      (* printf "EXITING fast recovery\n%!"; *)
       t.snd_una <- r;
       t.cwnd <- t.ssthresh;
       t.fast_recovery <- false;
@@ -129,7 +151,21 @@ let tx_ack t r =
     end
   end else begin
     if Sequence.gt r t.snd_una then begin
+      t.backoff_count <- 0;
       t.snd_una <- r;
+      if t.rtt_timer_on && Sequence.gt r t.rtt_timer_seq then begin
+        t.rtt_timer_on <- false;
+        let rtt_m = OS.Clock.time () -. t.rtt_timer_starttime in
+	if t.rtt_timer_reset then begin
+	  t.rtt_timer_reset <- false;
+          t.rttvar <- (0.5 *. rtt_m);
+          t.srtt <- rtt_m;
+	end else begin
+          t.rttvar <- (((1.0 -. beta) *. t.rttvar) +. (beta *. (abs_float (t.srtt -. rtt_m))));
+          t.srtt <- (((1.0 -. alpha) *. t.srtt) +. (alpha *. rtt_m));
+	end;
+        t.rto <- (max 1.0 (t.srtt +. (4.0 *. t.rttvar)));
+      end;
     end;
     let cwnd_incr = match t.cwnd < t.ssthresh with
     | true -> Int32.of_int t.tx_mss
@@ -145,20 +181,38 @@ let tx_available t =
   let inflight = Sequence.to_int32 (Sequence.sub t.tx_nxt t.snd_una) in
   let win = min t.cwnd t.tx_wnd in
   let avail_win = Int32.sub win inflight in
-  let avail_win_norunts =
-    match avail_win < Int32.of_int t.tx_mss with | true -> 0l | false -> avail_win in
-  avail_win_norunts
+  match avail_win < Int32.of_int t.tx_mss with
+  | true -> 0l
+  | false -> avail_win
+
+
 
 let alert_fast_rexmit t seq =
   let inflight = Sequence.to_int32 (Sequence.sub t.tx_nxt t.snd_una) in
   let newssthresh = max (Int32.div inflight 2l) (Int32.of_int (t.tx_mss * 2)) in
   let newcwnd = Int32.add newssthresh (Int32.of_int (t.tx_mss * 2)) in
+  (*
   printf "ENTERING fast recovery inflight=%d, ssthresh=%d -> %d, cwnd=%d -> %d\n%!"
     (Int32.to_int inflight)
     (Int32.to_int t.ssthresh)
     (Int32.to_int newssthresh)
     (Int32.to_int t.cwnd)
     (Int32.to_int newcwnd);
+    *)
   t.fast_recovery <- true;
   t.ssthresh <- newssthresh;
+  t.rtt_timer_on <- false;  
   t.cwnd <- newcwnd
+
+let rto t =
+  match t.backoff_count with
+  | 0 -> t.rto
+  | _ -> t.rto *. (2. ** (float_of_int t.backoff_count))
+
+let backoff_rto t =
+  t.backoff_count <- t.backoff_count + 1;
+  t.rtt_timer_on <- false;  
+  t.rtt_timer_reset <- true  
+
+let max_rexmits_done t =
+  (t.backoff_count > 5)
