@@ -28,11 +28,8 @@ let lib = getenv ~default:(home / "mir-inst") "MIRAGELIB"
 let cc = getenv ~default:"cc" "CC"
 let ld = getenv ~default:"ld" "LD"
 
-<<<<<<< HEAD
 let profiling = false (* true *)
 
-=======
->>>>>>> 585ecdb353f465db9489dd76882ccf77fccb6900
 (** Utility functions (e.g. to execute a command and return lines read) *)
 module Util = struct
   let split s ch =
@@ -98,11 +95,7 @@ module Mir = struct
       |Linux -> [A"-lm"; A"-lasmrun"; A"-lcamlstr"; A"-ldl"]
       |Darwin |FreeBSD -> [A"-lm"; A"-lasmrun"; A"-lcamlstr"] in
     let tags = tags++"cc"++"c" in
-<<<<<<< HEAD
     Cmd (S (A cc :: [ T(tags++"link"); (* A"-pg"; *) A ocamlc_libdir; A"-o"; Px out; 
-=======
-    Cmd (S (A cc :: [ T(tags++"link"); A ocamlc_libdir; A"-o"; Px out; 
->>>>>>> 585ecdb353f465db9489dd76882ccf77fccb6900
              A (unixmain mode); P arg; A (unixrun mode); ] @ dl_libs))
 
   (** Link to a standalone Xen microkernel *)
@@ -424,10 +417,7 @@ let _ = dispatch begin function
     flag ["ocaml"; "compile"] & std_flags;
     flag ["ocaml"; "pack"] & std_flags;
     flag ["ocaml"; "link"] & std_flags;
-<<<<<<< HEAD
     flag ["ocaml"; "native"; "compile"] & S [ (* A"-p" *)];
-=======
->>>>>>> 585ecdb353f465db9489dd76882ccf77fccb6900
     (* Include the correct stdlib depending on which backend is chosen *)
     List.iter (fun be ->
       let be = Spec.backend_to_string be in
