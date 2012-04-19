@@ -178,11 +178,15 @@ let process_of_packet state (remote_addr, remote_port) ofp t =
         -> ((* cp "FEATURES_RESP";*)
             let dpid = sfs.Switch.datapath_id in
             let evt = Event.Datapath_join dpid in
-            if not (Hashtbl.mem state.dp_db dpid) then (
-                Hashtbl.add state.dp_db dpid {ch=t;
-                buf=Bitstring.empty_bitstring;};
-              Hashtbl.add state.channel_dp ep dpid
+            if (Hashtbl.mem state.dp_db dpid) then (
+              Printf.printf "Deleting old state \n%!";
+              Hashtbl.remove state.dp_db dpid;
+              Hashtbl.remove state.channel_dp ep
             );
+            Hashtbl.add state.dp_db dpid {ch=t;
+            buf=Bitstring.empty_bitstring;};
+            Hashtbl.add state.channel_dp ep dpid;
+           
             List.iter (fun cb -> resolve(cb state dpid evt)) state.datapath_join_cb;
             return ()
         )
@@ -301,7 +305,7 @@ let rec rd_data len t =
 let start = ref 0.0
 
 let mem_dbg name =
-  Gc.compact (); 
+(*   Gc.compact ();  *)
   let s = Gc.stat () in
   Printf.printf "blocks %s: l=%d f=%d \n %!" name s.Gc.live_blocks s.Gc.free_blocks
 
@@ -372,11 +376,34 @@ let listen mgr loc init =
     let rs = Nettypes.ipv4_addr_to_string remote_addr in
     let data_cache = ref (Bitstring.empty_bitstring) in 
     Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port;
+
+(*
+   let rec echo () =                                                     
+     try_lwt                                                             
+       (*   lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in *)    
+       lwt hbuf = read_cache_data t data_cache (OP.Header.get_len ) in   
+       let ofh  = OP.Header.parse_h hbuf in                              
+       let dlen = ofh.OP.Header.len - OP.Header.get_len in               
+       (*   lwt dbuf = rd_data dlen t in *)                                
+       lwt dbuf = read_cache_data t data_cache dlen in                   
+       let ofp  = OP.parse ofh dbuf in                                   
+       process_of_packet st (remote_addr, remote_port) ofp t;            
+       echo ()                                                           
+     with                                                                
+       | Nettypes.Closed -> return ()                                    
+       | OP.Unparsed (m, bs) -> cp (sp "# unparsed! m=%s" m); echo ()    
+                                                                         
+   in echo ()                                                            
+   in                                                                    
+*)
+   
+ 
     let echo () =
         try_lwt 
         (*         watchdog2(); *)
 (*           mem_dbg "before read"; *)
 (*           lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in *)
+(*             lwt _ = OS.Time.sleep 0.0 in  *)
             lwt hbuf = read_cache_data t data_cache (OP.Header.get_len ) in
 (*           Bitstring.hexdump_bitstring stdout hbuf;  *)
             check_data_size OP.Header.get_len ((Bitstring.bitstring_length hbuf)/8); 
@@ -387,30 +414,46 @@ let listen mgr loc init =
           lwt dbuf = read_cache_data t data_cache dlen in 
 (*           Bitstring.hexdump_bitstring stdout dbuf;  *)
 (*           lwt dbuf = rd_data dlen t in *)
-(*
-          mem_dbg "read";
-*)
+(*           mem_dbg "read"; *)
             check_data_size dlen ((Bitstring.bitstring_length dbuf)/8);           
             let ofp  = OP.parse ofh dbuf in
 (*           mem_dbg "parse"; *)
           lwt () = process_of_packet st (remote_addr, remote_port) ofp t in
-(*           mem_dbg "process"; *)
+           (*mem_dbg "process"; *)
           return true
         with
-          | Nettypes.Closed -> return false;
+          | Nettypes.Closed -> (
+            let ep = {ip=remote_addr;port=remote_port} in 
+            let dpid = (Hashtbl.find st.channel_dp ep) in
+            let evt = Event.Datapath_leave (dpid) in
+            List.iter (fun cb -> resolve(cb st dpid evt)) st.datapath_leave_cb;
+            Hashtbl.remove st.channel_dp ep;
+            Hashtbl.remove st.dp_db dpid;
+            return false)
           | OP.Unparsed(m, bs) 
-          | OP.Unparsable(m, bs) -> cp (sp "# unparsed! m=%s" m);
-          Bitstring.hexdump_bitstring stdout bs; 
-          Printf.printf "exception bits size %d\n%!" (Bitstring.bitstring_length
-          bs); return true
-
-          | Not_found ->  Printf.printf "iNot found\n"; return true
+          | OP.Unparsable(m, bs) -> 
+              cp (sp "# unparsed! m=%s" m);
+              Bitstring.hexdump_bitstring stdout bs; 
+              Printf.printf "exception bits size %d\n%!" (Bitstring.bitstring_length
+              bs); return true
+          | Not_found ->  
+              Printf.printf "iNot found\n";  
+              return true
     in
     let continue = ref true in
+    let count = (ref 0) in 
     while_lwt !continue do
-      lwt x = echo() in
-      continue := x;
-      return ()
+      incr count;
+
+(*      if (!count >= 1000) then (
+        count := 0;
+        OS.Time.sleep 0.0
+      ) else ( *)
+        lwt x = echo () in
+        continue := x;
+        return ()
+(*         )  *)
     done
   in
+
   (Channel.listen mgr (`TCPv4 (loc, controller))) 

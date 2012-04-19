@@ -389,8 +389,10 @@ module Port = struct
     peer=init_port_features;}
 
    let bitstring_of_phy phy =
-     (BITSTRING{phy.port_no:16; phy.hw_addr:48:string;phy.name:32:string;
-               (Int64.of_int 0):64; (Int32.of_int 0):32; 
+     (BITSTRING{phy.port_no:16; phy.hw_addr:48:string;
+    (Printf.sprintf "%s%s" phy.name (String.make (16-(String.length
+    phy.name)) (Char.chr 0))):16*8:string;
+(*                (Int64.of_int 0):64; (Int32.of_int 0):32;  *)
      (Int32.of_int 0):32; (Int32.of_int 0):32; (Int32.of_int 0):32;  
      (Int32.of_int 0):32; (Int32.of_int 0):32; (Int32.of_int 0):32})
 
@@ -548,14 +550,16 @@ module Switch = struct
 
   let gen_reply_features req datapath_id ports_phy =
     let ports_phy_bitstring = (Bitstring.concat (bitstring_list_of_ports_phy_list ports_phy)) in
+
     let ports_count = (List.length ports_phy) in    
     (* Need to fixc this part in order to return true information for the switch *)
     let header = (Header.create  Header.FEATURES_RESP (Header.get_len + 24 + ports_count*Port.phy_len) 
       req.Header.xid) in
-     BITSTRING{ (Header.build_h header):(Header.get_len*8):bitstring
+    BITSTRING{ (Header.build_h header):(Header.get_len*8):bitstring
        ;datapath_id:64; (Int32.of_int 0):32; 1:8; 0:24; (Int32.of_int 0):32;
        (Int32.of_int 0):32 ;
-       ports_phy_bitstring:(Bitstring.bitstring_length ports_phy_bitstring):bitstring }
+       ports_phy_bitstring:(Bitstring.bitstring_length
+       ports_phy_bitstring):bitstring } 
 
 (*       Printf.printf "Sending data %d\n" (Bitstring.bitstring_length data); *)
 

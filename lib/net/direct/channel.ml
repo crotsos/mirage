@@ -157,6 +157,11 @@ module Make(Flow:FLOW) :
     t.obuf <- buf :: t.obuf;
     return ()
 
+  let write_bitstring t buf =
+    t.obuf <- buf :: t.obuf;
+    return ()
+
+
   let write_string t buf =
     write_bitstring t (Bitstring.bitstring_of_string buf)
 
