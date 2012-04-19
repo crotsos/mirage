@@ -72,7 +72,6 @@ static struct page_table caml_page_table;
 #endif
 #define Hash(v) (((v) * HASH_FACTOR) >> caml_page_table.shift)
 
-
 #ifdef USE_STATIC_VMEM
 extern unsigned long _mlstart, _mlend;
 static unsigned long mlstart = (unsigned long)&_mlstart;
@@ -82,13 +81,13 @@ static unsigned long mlend = (unsigned long)&_mlend;
 int caml_page_table_lookup(void * addr)
 {
 #ifdef USE_STATIC_VMEM
-  if (addr >= HYPERVISOR_VIRT_END)
+  if (addr >= (void *)MAJOR_HEAP_BASE)
     return In_heap;
-  if ((unsigned long)addr >= mlstart && (unsigned long)addr < mlend)
+  else if (addr >= (void *)MINOR_HEAP_BASE)
+    return In_young;
+  else if ((unsigned long)addr >= mlstart && (unsigned long)addr < mlend)
     return In_static_data;
-  /* XXX need minor heap area also. In_code area is mapped to In_static_data. */
-  return 0;
-#else
+#endif
   uintnat h, e;
 
   h = Hash(Page(addr));
@@ -101,7 +100,6 @@ int caml_page_table_lookup(void * addr)
     e = caml_page_table.entries[h];
     if (Page_entry_matches(e, (uintnat)addr)) return e & 0xFF;
   }
-#endif
 }
 
 int caml_page_table_initialize(mlsize_t bytesize)
@@ -164,15 +162,6 @@ static int caml_page_table_modify(uintnat page, int toclear, int toset)
 
   Assert ((page & ~Page_mask) == 0);
 
-#ifdef USE_STATIC_VMEM
-  /* All pages above HYPERVISOR_VIRT_END are part of the OCaml heap */
-  if (page >= HYPERVISOR_VIRT_END)
-    return 0;
-#if 0
-  else
-    printf("modify: %p %d %d\n", page, toclear, toset);
-#endif
-#endif
   /* Resize to keep load factor below 1/2 */
   if (caml_page_table.occupancy * 2 >= caml_page_table.size) {
     if (caml_page_table_resize() != 0) return -1;
@@ -260,7 +249,7 @@ char *caml_alloc_for_heap (asize_t request)
   char *mem;
   void *block;
                                               Assert (request % Page_size == 0);
-  mem = caml_aligned_malloc (request + sizeof (heap_chunk_head),
+  mem = caml_aligned_malloc_for_major (request + sizeof(heap_chunk_head),
                              sizeof (heap_chunk_head), &block);
   if (mem == NULL) return NULL;
   mem += sizeof (heap_chunk_head);
@@ -275,7 +264,7 @@ char *caml_alloc_for_heap (asize_t request)
 void caml_free_for_heap (char *mem)
 {
 #ifdef SYS_xen
-  fprintf(stderr,"free_for_heap\n");
+//  fprintf(stderr,"free_for_heap\n");
 //  free (Chunk_block (mem));
 #else
   free (Chunk_block (mem));
@@ -386,6 +375,7 @@ static char *expand_heap (mlsize_t request)
 */
 void caml_shrink_heap (char *chunk)
 {
+  return;
   char **cp;
 
   /* Never deallocate the first block, because caml_heap_start is both the

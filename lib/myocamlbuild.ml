@@ -24,9 +24,13 @@ open Ocamlbuild_pack.Tools
 let ps = Printf.sprintf
 let ep = Printf.eprintf
 
-let debug = false
-let profiling = false (* true *)
-let native_p4 = true (* In case you have problems with natdynlink, set this to false *)
+let debug = 
+  let e = getenv "MIR-DEBUG" ~default:"0" in
+  match e with "0" -> false | _ -> true
+
+let profiling = false
+(* In case you have problems with natdynlink, set this to false *)
+let native_p4 = true
 
 module Spec = struct
   type t = { os: string; net: string; block: string; syntax: string; }

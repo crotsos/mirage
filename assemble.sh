@@ -1,4 +1,4 @@
-#!/usr/bin/env bash -e
+#!/usr/bin/env bash 
 #
 # Assemble a bunch of standard library kernels for the
 # various OS configurations:
@@ -14,6 +14,7 @@
 # The myocamlbuild.ml in scripts/ understands the necessary runes to link
 # against each of these backends (mainly the library dependencies)
 
+set -e
 ROOT=`pwd`
 BUILDDIR=${ROOT}/_build
 
@@ -67,7 +68,7 @@ function assemble_syntax {
   echo Assembling: camlp4 extensions
   OBJ=${BUILDDIR}/syntax
   mkdir -p ${OBJ}
-  cp ${ROOT}/syntax/_build/*.{cma,cmi,cmo,cmxs} ${OBJ}/
+  cp ${ROOT}/syntax/_build/*.{cmi,cmxs} ${OBJ}/
 }
 
 function assemble_scripts {
@@ -87,7 +88,6 @@ function assemble_bin {
   cp ${ROOT}/tools/crunch/_build/crunch.native ${OBJ}/mir-crunch
   cp ${ROOT}/tools/fs/mir-fs-create ${OBJ}/mir-fs-create
   cp ${ROOT}/scripts/mir-fat-create ${OBJ}/mir-fat-create
-  cp ${ROOT}/scripts/annot ${OBJ}/annot
 }
 
 assemble_syntax
