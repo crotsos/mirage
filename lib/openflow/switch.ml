@@ -117,20 +117,14 @@ end
 
 module Table = struct
   type t = {
-    
-
     tid: cookie;
-
     (* This stores entries as they arrive *)
     mutable entries: (OP.Match.t, Entry.t ref) Hashtbl.t;
-
     (* This stores only exact match entries.*)
     (* TODO delete an entry from both tables *)
     mutable cache : (OP.Match.t, Entry.t ref) Hashtbl.t;
     mutable lookup: uint64;
     mutable missed: uint64;
-
-
   }
 end
 
@@ -153,104 +147,104 @@ module Switch = struct
   }
 
 
-  type lookup_ret = 
+  type lookup_ret = 
          Found of Entry.t ref
        | NOT_FOUND
 
-      type t = {
-        (* Mapping Netif objects to ports *)
-          mutable ports: (OS.Netif.id, port ref) Hashtbl.t;
+  type t = {
+    (* Mapping Netif objects to ports *)
+    mutable ports: (OS.Netif.id, port ref) Hashtbl.t;
 
-        (* Mapping port ids to port numbers *)
-        mutable int_ports: (int, port ref) Hashtbl.t;
-        mutable port_feat : OP.Port.phy list;
-        mutable controllers: (Net.Channel.t) list;
-        table: Table.t;
-        stats: stats;
-        p_sflow: uint32; (** probability for sFlow sampling *)
-        mutable errornum : uint32; 
-        mutable portnum : int;
-      }
+    (* Mapping port ids to port numbers *)
+    mutable int_ports: (int, port ref) Hashtbl.t;
+    mutable port_feat : OP.Port.phy list;
+    mutable controllers: (Net.Channel.t) list;
+    table: Table.t;
+    stats: stats;
+    p_sflow: uint32; (** probability for sFlow sampling *)
+    mutable errornum : uint32; 
+    mutable portnum : int;
+    pkt_queue: (string * Bitstring.t) Lwt_stream.t;
+    push_pkt : ((string * Bitstring.t) option -> unit);
+    mutable queue_size : int;
+  }
 
-      let bitstring_of_port port = 
-        BITSTRING{ port.port_id:16; 0L:48; 
-            port.counter.Entry.rx_packets:64; 
-            port.counter.Entry.tx_packets:64; (* Receive/transmit bytes *)
-            port.counter.Entry.rx_bytes:64; 
-            port.counter.Entry.tx_bytes:64; 
-            port.counter.Entry.rx_drops:64; 
-            port.counter.Entry.tx_drops:64; 
-            port.counter.Entry.rx_errors:64; 
-            port.counter.Entry.tx_errors:64; 
-            port.counter.Entry.rx_alignment_errors:64; 
-            port.counter.Entry.rx_overrun_errors:64; 
-            port.counter.Entry.rx_crc_errors:64; (* Receive/transmit packets *)
-            port.counter.Entry.n_collisions:64}
+  let bitstring_of_port port = 
+    BITSTRING{ port.port_id:16; 0L:48; 
+               port.counter.Entry.rx_packets:64; 
+               port.counter.Entry.tx_packets:64; (* Receive/transmit bytes *)
+               port.counter.Entry.rx_bytes:64; 
+               port.counter.Entry.tx_bytes:64; 
+               port.counter.Entry.rx_drops:64; 
+               port.counter.Entry.tx_drops:64; 
+               port.counter.Entry.rx_errors:64; 
+               port.counter.Entry.tx_errors:64; 
+               port.counter.Entry.rx_alignment_errors:64; 
+               port.counter.Entry.rx_overrun_errors:64; 
+               port.counter.Entry.rx_crc_errors:64; (* Receive/transmit packets *)
+               port.counter.Entry.n_collisions:64}
 
-      let forward_frame st in_port port frame pkt_size =
+  let forward_frame st in_port port frame pkt_size =
 (*
       Printf.printf "Outputing frame to port %s\n" (OP.Port.string_of_port
        port);
  *)
-       if (frame == Bitstring.empty_bitstring) then 
-           return ()
-       else (
-           match port with 
-           | OP.Port.Port(port) -> 
-                   if Hashtbl.mem st.int_ports port then(
-                       let out_p = (!( Hashtbl.find st.int_ports port))  in
-                       Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
-                       out_p.counter.Entry.tx_packets <- Int64.add
-                       out_p.counter.Entry.tx_packets 1L;
-                       out_p.counter.Entry.tx_bytes <- Int64.add
-                       out_p.counter.Entry.tx_bytes
-                       (Int64.of_int ((Bitstring.bitstring_length frame)/8));
-                       return ())
-                   else
+    if (frame = Bitstring.empty_bitstring) then 
+      return ()
+    else (
+      match port with 
+        | OP.Port.Port(port) -> 
+            if Hashtbl.mem st.int_ports port then(
+              let out_p = (!( Hashtbl.find st.int_ports port))  in
+                Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
+(*
+                out_p.counter.Entry.tx_packets <- Int64.add
+                                                    out_p.counter.Entry.tx_packets 1L;
+                out_p.counter.Entry.tx_bytes <- Int64.add
+                                                  out_p.counter.Entry.tx_bytes
+                                                  (Int64.of_int ((Bitstring.bitstring_length frame)/8));
+ *)
+                return ())
+            else
+              return (Printf.printf "Port %d not registered \n" port)
+        | OP.Port.No_port -> return ()
+        | OP.Port.Flood |OP.Port.All ->
+            return (Hashtbl.iter 
+                      (fun port_id port -> 
+                         if(port_id != (OP.Port.int_of_port in_port)) then (
+                           (!port).counter.Entry.tx_packets <- 
+                             Int64.add(!port).counter.Entry.tx_packets 1L;
+                           (!port).counter.Entry.tx_bytes <- 
+                             Int64.add (!port).counter.Entry.tx_bytes
+                               (Int64.of_int ((Bitstring.bitstring_length frame)/8));                           
+                           resolve(Net.Manager.send_raw (!port).mgr (!port).port_name
+                                     [frame]))
+                         else (
+                                      (* Printf.printf "Not sending packet on %d %d\n%!" port_id
+                                       (OP.Port.int_of_port in_port);
+                                       *)
+                           ())
+                      ) st.int_ports)
+        | OP.Port.In_port ->
+            let port = (OP.Port.int_of_port in_port) in 
+              if Hashtbl.mem st.int_ports port then
+                let out_p = (!(Hashtbl.find st.int_ports port))  in
+                  out_p.counter.Entry.tx_packets <- 
+                    Int64.add out_p.counter.Entry.tx_packets 1L;
+                  out_p.counter.Entry.tx_bytes <- 
+                    Int64.add out_p.counter.Entry.tx_bytes
+                      (Int64.of_int ((Bitstring.bitstring_length frame)/8)); 
+                  (Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
+                   return ())
+                  else
                     return (Printf.printf "Port %d not registered \n" port)
-           | OP.Port.No_port -> return ()
-           | OP.Port.Flood |OP.Port.All ->
-                   return (Hashtbl.iter (fun port_id port -> 
-                       if(port_id != (OP.Port.int_of_port in_port)) then
-                        (
-                           (*
-                            Printf.printf "Sending packet on %d %d %s bits %d\n%!" port_id
-                           (OP.Port.int_of_port in_port) (!port).port_name
-                           (Bitstring.bitstring_length frame);
- *)
-                           (!port).counter.Entry.tx_packets <- Int64.add
-                           (!port).counter.Entry.tx_packets 1L;
-                           (!port).counter.Entry.tx_bytes <- Int64.add
-                           (!port).counter.Entry.tx_bytes
-                           (Int64.of_int ((Bitstring.bitstring_length frame)/8));                           
-                       resolve(Net.Manager.send_raw (!port).mgr (!port).port_name
-                           [frame]))
-                   else (
-                       (* Printf.printf "Not sending packet on %d %d\n%!" port_id
-                       (OP.Port.int_of_port in_port);
- *)
-                       ())
-                       ) st.int_ports)
-           | OP.Port.In_port ->
-                   let port = (OP.Port.int_of_port in_port) in 
-                   if Hashtbl.mem st.int_ports port then
-                       let out_p = (!(Hashtbl.find st.int_ports port))  in
-                           out_p.counter.Entry.tx_packets <- Int64.add
-                           out_p.counter.Entry.tx_packets 1L;
-                           out_p.counter.Entry.tx_bytes <- Int64.add
-                           out_p.counter.Entry.tx_bytes
-                           (Int64.of_int ((Bitstring.bitstring_length frame)/8)); 
-                           (Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
-                       return ())
-                       else
-                           return (Printf.printf "Port %d not registered \n" port)
-                           (*           | Table
-                            *           | Normal
-                            *           | Controller -> generate a packet out. 
-                            *           | Local -> can I inject this frame to the network
-                            *           stack?  *)
-           | _ -> return (Printf.printf "Not implemented output port\n")
-       )
+        (*           | Table
+         *           | Normal
+         *           | Controller -> generate a packet out. 
+         *           | Local -> can I inject this frame to the network
+         *           stack?  *)
+        | _ -> return (Printf.printf "Not implemented output port\n")
+    )
 
   let rec set_frame_bits frame start len bits = 
     match len with 
@@ -264,7 +258,7 @@ module Switch = struct
         (* Assumwe that action are valid. I will not get a flow that sets an ip
          * address unless it defines that the ethType is ip. Need to enforce
          * these rule in the parsing process of the flow_mod packets *)
-   let rec apply_of_actions st in_port actions frame = 
+  let rec apply_of_actions st in_port actions frame = 
     match actions with 
       | [] -> return ()
       | head :: actions ->
@@ -308,7 +302,6 @@ module Switch = struct
               apply_of_actions st in_port actions frame
 
    let errornum = ref 1 
-
    let lookup_flow st of_match =
        (* Check first the match table cache *)
         if (Hashtbl.mem st.table.Table.cache of_match ) then (
@@ -338,21 +331,25 @@ module Switch = struct
         )
 end
 
-let st = Switch.(
+let st = 
+  let pkt_queue, push_pkt = Lwt_stream.create () in 
+  Switch.(
   { ports = (Hashtbl.create 0); int_ports = (Hashtbl.create 0);
   table = Table.({ tid = 0_L; entries = (Hashtbl.create 0); cache = (Hashtbl.create 0); 
         missed = 0L; lookup=0L;});
     stats = { n_frags=0_L; n_hits=0_L; n_missed=0_L; n_lost=0_L };
     p_sflow = 0_l; controllers=[]; port_feat = []; errornum = 0l;
-    portnum=0;
+    portnum=0; pkt_queue; push_pkt; queue_size=0;
   })
 
 let add_flow tuple actions =
-    Printf.printf "adding flow %s %s\n%!" (OP.Match.match_to_string tuple) (OP.Flow.string_of_actions actions);
+    Printf.printf "adding flow %s %s\n%!" 
+      (OP.Match.match_to_string tuple) (OP.Flow.string_of_actions actions);
   if (Hashtbl.mem st.Switch.table.Table.entries tuple) then
      Printf.printf "Tuple already exists\n%! %s" (OP.Match.match_to_string tuple)  
   else
-    Hashtbl.add st.Switch.table.Table.entries tuple (ref Entry.({actions; counters=(init_flow_counters ())}))
+    Hashtbl.add st.Switch.table.Table.entries tuple 
+      (ref Entry.({actions; counters=(init_flow_counters ())}))
 
 let del_flow tuple out_port =
     Printf.printf "delete flow %s\n%!" (OP.Match.match_to_string tuple);
@@ -376,6 +373,7 @@ let del_flow tuple out_port =
 (*     Hashtbl.add st.Switch.table.Table.entries tuple (ref Entry.({actions;
  *     counters=(init_flow_counters ())})) *)
 
+let pkt_count = ref 0L
 let process_frame intf_name frame = 
   (* roughly,
    * + examine frame
@@ -384,52 +382,73 @@ let process_frame intf_name frame =
    *   + if match, update counters, execute actions
    *   + else, forward to controller/drop, depending on config
    *)
-(*   Printf.printf "Packet received by switch on port %s\n%!" intf_name; *)
-  if (Hashtbl.mem st.Switch.ports intf_name ) then
-    let p = (!(Hashtbl.find st.Switch.ports intf_name)) in
-    let in_port = (OP.Port.port_of_int p.Switch.port_id) in (* Hashtbl.find   in *)
-    let tupple = (OP.Match.parse_from_raw_packet in_port frame ) in
-    (* Update port rx statistics *)
-    p.Switch.counter.Entry.rx_packets <- (Int64.add p.Switch.counter.Entry.rx_packets 1L); 
-    p.Switch.counter.Entry.rx_bytes <- (Int64.add p.Switch.counter.Entry.rx_bytes 
-    (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
+(*
+  pkt_count := (Int64.add (!pkt_count) 1L);
+  if( (Int64.rem (!pkt_count) 1000L) = 0L ) then
+    return (Printf.printf "reading pkt %Ld\n%!" !pkt_count)
+  else 
+    return ()
 
-    (* Lookup packet flow to existing flows in table *)
-    let entry = (Switch.lookup_flow st tupple) in 
-    match entry with 
-    | Switch.NOT_FOUND ->
-            Printf.printf "No netry found for match %s\n%!" (OP.Match.match_to_string tupple);
-            st.Switch.table.Table.missed <- (Int64.add
-            st.Switch.table.Table.missed 1L);
-
-(*            let addr = "\x11\x11\x11\x11\x11\x11" in 
-            add_flow tupple [(OP.Flow.Set_dl_src (addr));
-            (OP.Flow.Set_dl_dst (addr));
-            (OP.Flow.Set_nw_dst (0xa0a0a0al));
-            (OP.Flow.Set_tp_src (1010));
-            (OP.Flow.Set_tp_dst (1010));
-            (OP.Flow.Output ((OP.Port.port_of_int 2),  2000)) ; ];
+let process_frame_depricate intf_name frame =
  *)
-            add_flow tupple [(OP.Flow.Output ((OP.Port.port_of_int 2),  2000)) ; ];
+    if (st.Switch.queue_size < 512) then (
+      (st.Switch.push_pkt (Some(intf_name, frame)));
+      return (st.Switch.queue_size <- st.Switch.queue_size + 1)
+    ) else 
+      return ()
 
 
-            let pkt_in = (OP.Packet_in.bitstring_of_pkt_in ~port:in_port
-            ~reason:OP.Packet_in.NO_MATCH ~bits:frame ()) in 
-            return (List.iter (fun t -> (Channel.write_bitstring t pkt_in) >>
-            Channel.flush t; ()) st.Switch.controllers)
-                (* generate a packet in event *)
-    | Switch.Found(entry) ->
-            st.Switch.table.Table.lookup <- (Int64.add
-            st.Switch.table.Table.lookup 1L);
-            (!entry).Entry.counters.Entry.n_packets <- (Int64.add
-            (!entry).Entry.counters.Entry.n_packets 1L);
-            (!entry).Entry.counters.Entry.n_bytes <- (Int64.add
-            (!entry).Entry.counters.Entry.n_bytes  (Int64.of_int
-            ((Bitstring.bitstring_length frame)/8)));
-            (!entry).Entry.counters.Entry.last_secs = (Int32.of_float (OS.Clock.time ()));
-            Switch.apply_of_actions st tupple.OP.Match.in_port (!entry).Entry.actions frame
-  else
-      return (Printf.printf "Port %s not found\n%!" intf_name) 
+  let forward_packet () = 
+  pkt_count := (Int64.add (!pkt_count) 1L);
+  let _ = 
+    if( (Int64.rem (!pkt_count) 1000L) = 0L ) then
+      Printf.printf "reading pkt %Ld\n%!" !pkt_count
+  in
+  try_lwt
+    if (Hashtbl.mem st.Switch.ports intf_name ) then (
+      let p = (!(Hashtbl.find st.Switch.ports intf_name)) in
+      let in_port = (OP.Port.port_of_int p.Switch.port_id) in (* Hashtbl.find   in *)
+      let tupple = (OP.Match.parse_from_raw_packet in_port frame ) in
+        (* Update port rx statistics *)
+(*
+        p.Switch.counter.Entry.rx_packets <- 
+        (Int64.add p.Switch.counter.Entry.rx_packets 1L); 
+        p.Switch.counter.Entry.rx_bytes <- 
+        (Int64.add p.Switch.counter.Entry.rx_bytes 
+           (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
+ *)
+        (* Lookup packet flow to existing flows in table *)
+        let entry = (Switch.lookup_flow st tupple) in 
+          match entry with 
+            | Switch.NOT_FOUND ->
+                Printf.printf "No etry found for match %s\n%!" (OP.Match.match_to_string tupple);
+                st.Switch.table.Table.missed <- (Int64.add
+                                                   st.Switch.table.Table.missed 1L);
+                add_flow tupple [(OP.Flow.Output ((OP.Port.port_of_int 1),  2000)) ; ];
+                let pkt_in = (OP.Packet_in.bitstring_of_pkt_in ~port:in_port
+                                ~reason:OP.Packet_in.NO_MATCH ~bits:frame ()) in 
+                  return (List.iter (fun t -> (Channel.write_bitstring t pkt_in) >>
+                                                 Channel.flush t; ()) st.Switch.controllers)
+            (* generate a packet in event *)
+            | Switch.Found(entry) ->
+(*
+                st.Switch.table.Table.lookup <- 
+                (Int64.add st.Switch.table.Table.lookup 1L);
+                (!entry).Entry.counters.Entry.n_packets <- 
+                (Int64.add (!entry).Entry.counters.Entry.n_packets 1L);
+                (!entry).Entry.counters.Entry.n_bytes <- 
+                (Int64.add (!entry).Entry.counters.Entry.n_bytes  
+                   (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
+                (!entry).Entry.counters.Entry.last_secs = 
+                  (Int32.of_float (OS.Clock.time ()));
+ *)
+                Switch.apply_of_actions st tupple.OP.Match.in_port 
+                  (!entry).Entry.actions frame
+    ) else 
+      return (Printf.eprintf "Port %s not found\n%!" intf_name) 
+  with exn ->
+    Printf.eprintf "of-switch ERROR : %s\n%!" (Printexc.to_string exn);
+    return ()
 
 let add_port sw mgr intf = 
   Net.Manager.intercept intf process_frame;
