@@ -147,8 +147,11 @@ module CC = struct
   (* defines used by the ocaml runtime, as well as includes *)
   let ocaml_debug_inc = if debug then [A "-DDEBUG"] else []
   let ocaml_incs = [
-    A "-DCAML_NAME_SPACE"; A "-DNATIVE_CODE"; A "-DTARGET_amd64"; A "-DSYS_xen";
+    A "-DCAML_NAME_SPACE"; A "-DTARGET_amd64"; A "-DSYS_xen";
     A (ps "-I%s/os/runtime_xen/ocaml" Pathname.pwd) ] @ ocaml_debug_inc
+
+  let ocaml_asmrun = [ A"-DNATIVE_CODE" ]
+  let ocaml_byterun = [ ]
 
   (* ocaml system include directory i.e. /usr/lib/ocaml *)
   let ocaml_sys_incs = [ A"-I"; Px (Util.run_and_read "ocamlc -where"); ]
@@ -180,6 +183,14 @@ module CC = struct
     Cmd(S[A ar; A"rc"; Px a; T(tags_of_pathname a++"c"++"archive"); atomize objs])
 
   let () =
+    rule "cc: .nc.c -> .c"
+      ~prod:"%.nc.c" ~dep:"%.c"
+      (fun env _ -> cp (env "%.c") (env "%.nc.c"));
+
+    rule "cc: .bc.c -> .c"
+      ~prod:"%.bc.c" ~dep:"%.c"
+      (fun env _ -> cp (env "%.c") (env "%.bc.c"));
+
     rule "cc: .c -> .o include ocaml dir"
       ~tags:["cc"; "c"]
       ~prod:"%.o" ~dep:"%.c"
@@ -265,45 +276,57 @@ let () =
 
 let _ = dispatch begin function
   | After_rules ->
-     (* do not compile and pack with the standard lib *)
-     flag ["ocaml"; "compile"; ] & S [A"-nostdlib"; A"-annot"];
-     flag ["ocaml"; "pack"; ] & S [A"-nostdlib"];
-     if profiling then
-       flag ["ocaml"; "compile"; "native" ] & S [A"-p"];
-     (* ocamldoc always uses the JSON generator *)
-     let docgenerator = "../../../docs/_build/odoc_json.cmxs" in
-     flag ["ocaml"; "doc"] & S [A"-g"; Px docgenerator ];
-     (* use pa_`lib` syntax extension if the _tags file specifies it *)
-     let p4_build = "../../../syntax/_build" in
-     let camlp4_bc = S[A"-pp"; A (ps "camlp4o -I %s str.cma pa_mirage.cma -cow-no-open" p4_build)] in
-     let camlp4_nc = S[A"-pp"; A (ps "camlp4o.opt -I %s str.cmxs pa_mirage.cmxs -cow-no-open" p4_build)] in
-     let camlp4_cmd = if native_p4 then camlp4_nc else camlp4_bc in
-     flag ["ocaml"; "compile" ; "pa_mirage"] & camlp4_cmd;
-     flag ["ocaml"; "ocamldep"; "pa_mirage"] & camlp4_cmd;
-     flag ["ocaml"; "infer_interface"; "pa_mirage"] & camlp4_cmd;
-     flag ["ocaml"; "doc"; "pa_mirage"] & camlp4_cmd;
-     (* add a dependency to the local pervasives, only used in stdlib compile *)
-     dep ["ocaml"; "compile"; "need_pervasives"] ["std/pervasives.cmi"];
-     (* net/direct includes *)
-     Pathname.define_context "net/direct" ["net/direct/tcp"; "net/direct/dhcp" ];
-     Pathname.define_context "net/direct/dhcp" ["net/direct" ];
-     Pathname.define_context "net/direct/tcp" ["net/direct" ];
+    (* do not compile and pack with the standard lib *)
+    flag ["ocaml"; "compile"; ] & S [A"-nostdlib"; A"-annot"];
+    if debug then
+      flag ["ocaml"; "compile"] & S [A"-g"];
+    flag ["ocaml"; "pack"; ] & S [A"-nostdlib"];
+    if profiling then
+      flag ["ocaml"; "compile"; "native" ] & S [A"-p"];
+    (* ocamldoc always uses the JSON generator *)
+    let docgenerator = "../../../docs/_build/odoc_json.cmxs" in
+    flag ["ocaml"; "doc"] & S [A"-g"; Px docgenerator ];
+    (* use pa_`lib` syntax extension if the _tags file specifies it *)
+    let p4_build = "../../../syntax/_build" in
+    let camlp4_bc =
+      S[A"-pp"; 
+        A (ps "camlp4o -I %s str.cma pa_mirage.cma -cow-no-open %s" 
+             p4_build (if debug then "-lwt-debug" else ""))] 
+    in
+    let camlp4_nc = 
+      S[A"-pp";
+        A (ps "camlp4o.opt -I %s str.cmxs pa_mirage.cmxs -cow-no-open %s"
+             p4_build (if debug then "-lwt-debug" else ""))] 
+    in
+    let camlp4_cmd = if native_p4 then camlp4_nc else camlp4_bc in
+    flag ["ocaml"; "compile" ; "pa_mirage"] & camlp4_cmd;
+    flag ["ocaml"; "ocamldep"; "pa_mirage"] & camlp4_cmd;
+    flag ["ocaml"; "infer_interface"; "pa_mirage"] & camlp4_cmd;
+    flag ["ocaml"; "doc"; "pa_mirage"] & camlp4_cmd;
+    (* add a dependency to the local pervasives, only used in stdlib compile *)
+    dep ["ocaml"; "compile"; "need_pervasives"] ["std/pervasives.cmi"];
+    (* net/direct includes *)
+    Pathname.define_context "net/direct" ["net/direct/tcp"; "net/direct/dhcp" ];
+    Pathname.define_context "net/direct/dhcp" ["net/direct" ];
+    Pathname.define_context "net/direct/tcp" ["net/direct" ];
 
-     (* some C code will use local ev.h *)
-     dep  ["c"; "compile"; "include_libev"] libev_files;
+    (* some C code will use local ev.h *)
+    dep  ["c"; "compile"; "include_libev"] libev_files;
 
-     (* base cflags for C code *)
-     flag ["c"; "compile"] & S CC.cc_cflags;
-     flag ["asm"; "compile"] & S [A "-D__ASSEMBLY__"];
-     if profiling then
-       flag ["c"; "compile"] & S [ (*A"-pg"*) ] ;
+    (* base cflags for C code *)
+    flag ["c"; "compile"] & S CC.cc_cflags;
+    flag ["asm"; "compile"] & S [A "-D__ASSEMBLY__"];
+    if profiling then
+      flag ["c"; "compile"] & S [A"-pg"];
 
-     (* xen code needs special cflags *)
-     flag ["c"; "compile"; "include_xen"] & S CC.xen_incs;
-     flag ["c"; "compile"; "include_libm"] & S CC.libm_incs;
-     flag ["c"; "compile"; "include_ocaml"] & S CC.ocaml_incs;
-     flag ["c"; "compile"; "include_system_ocaml"] & S CC.ocaml_sys_incs;
-     flag ["c"; "compile"; "include_dietlibc"] & S CC.dietlibc_incs;
-     flag ["c"; "compile"; "pic"] & S [A"-fPIC"]
+    (* xen code needs special cflags *)
+    flag ["c"; "compile"; "include_xen"] & S CC.xen_incs;
+    flag ["c"; "compile"; "include_libm"] & S CC.libm_incs;
+    flag ["c"; "compile"; "include_ocaml"] & S CC.ocaml_incs;
+    flag ["c"; "compile"; "ocaml_byterun"] & S CC.ocaml_byterun;
+    flag ["c"; "compile"; "ocaml_asmrun"] & S CC.ocaml_asmrun;
+    flag ["c"; "compile"; "include_system_ocaml"] & S CC.ocaml_sys_incs;
+    flag ["c"; "compile"; "include_dietlibc"] & S CC.dietlibc_incs;
+    flag ["c"; "compile"; "pic"] & S [A"-fPIC"]
   | _ -> ()
 end
