@@ -104,9 +104,16 @@ let create ethif =
   let listen = listen t in
   (t, listen)
 
-let input_raw t frame = 
-  List.iter (fun k -> (k (OS.Netif.ethid t.ethif) frame ); () ) t.raw_eth;
-  return ()
+let pkt_count = ref (0L)
+let input_raw t frame =
+  pkt_count := (Int64.add !pkt_count 1L);
+(*   if ((Int64.rem (!pkt_count) 1000L) = 0L) then (  *)
+(*     Printf.printf "output packet %Ld\n%!" (!pkt_count);  *)
+    Lwt_list.iter_p (fun k -> (k (OS.Netif.ethid t.ethif) frame )) t.raw_eth
+(*
+  ) else 
+    return ()
+ *)
 
 (* Loop and listen for frames *)
 let rec raw_listen t =
@@ -120,7 +127,7 @@ let create_raw ethif =
   let arp = Arp.create ~output:(output_arp ethif) ~get_mac in
   let t = { ethif; ipv4; mac; arp; raw_eth=[] } in
   let raw_listen = raw_listen t in
-  (t, raw_listen)
+    (t, raw_listen)
 
 let intercept t fn = 
   t.raw_eth <- t.raw_eth @ [fn]
