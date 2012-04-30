@@ -714,22 +714,6 @@ module Switch :
       mutable n_lost : uint64;
     }
     type t 
-(*
- = {
-        (* Pointer from netif details to specific port *)
-      mutable ports : (OS.Netif.id, port ref) Hashtbl.t;
-      (* Mapping of port id to a specific netif object.
-       * Need to do that so that we don't replicate the port structure*)
-      mutable int_ports : (int, port ref) Hashtbl.t; 
-      mutable port_feat : OP.Port.phy list;
-      mutable controllers :  (Net.Channel.t) list; 
-      table : Table.t;
-      stats : stats;
-      p_sflow : uint32;
-      mutable errornum : uint32;
-      mutable portnum : int;
-    }
- *)
     val apply_of_actions: t -> OP.Port.t -> OP.Flow.action list -> Bitstring.t -> unit Lwt.t
     val bitstring_of_port: port -> Bitstring.t
   end
