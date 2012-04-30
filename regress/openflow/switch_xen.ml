@@ -41,7 +41,7 @@ let init controller sw =
 
 
 let ip = Net.Nettypes.(
-  (ipv4_addr_of_tuple (10l,0l,0l,1l),
+  (ipv4_addr_of_tuple (10l,0l,0l,3l),
    ipv4_addr_of_tuple (255l,255l,255l,0l),
    [ ipv4_addr_of_tuple (10l,0l,0l,2l) ]
   )) 
