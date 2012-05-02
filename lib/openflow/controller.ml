@@ -314,36 +314,19 @@ let terminate st =
   Printf.printf "Terminating controller...\n"
    
 let get_len_data data_cache len = 
-    bitmatch (!data_cache) with
+  bitmatch (!data_cache) with
     | {ret:len*8:bitstring; buff:-1:bitstring} ->
-            (data_cache := buff; 
-(*          Printf.printf "new data after removal %d len\n%!"
- *          (Bitstring.bitstring_length (!data_cache)); *)
-         return ret)
+      (data_cache := buff; 
+      return ret)
 
 
 let read_cache_data t data_cache len = 
-(*      Bitstring.hexdump_bitstring stdout (!data_cache); *)
-     if ((Bitstring.bitstring_length (!data_cache)) < (len*8)) then
-(*     while_lwt (true) do *)
-        lwt buf = (Channel.read_some t) in
-(*
-         Printf.printf "not enough %d bytes for %d bytes, reading %d bytes\n%!" 
-         (Bitstring.bitstring_length (!data_cache)) len
-         (Bitstring.bitstring_length buf) ;
-*)
-         data_cache := (Bitstring.concat [(!data_cache);
-         buf; ]);
-(*          Printf.printf "new data len %d len\n%!" (Bitstring.bitstring_length
- *          (!data_cache)); *)
-        get_len_data data_cache len
-         (*
-         let ret = Bitstring.takebits (len*8) (!data_cache) in 
-            data_cache := Bitstring.dropbits (len*8) (!data_cache); 
-            return ret
-*)
-     else 
-        get_len_data data_cache len
+  if ((Bitstring.bitstring_length (!data_cache)) < (len*8)) then (
+    lwt buf = (Channel.read_some t) in
+      data_cache := (Bitstring.concat [(!data_cache); buf; ]);
+      get_len_data data_cache len
+  ) else 
+    get_len_data data_cache len
 (*
          let ret = Bitstring.takebits (len*8) (!data_cache) in 
             data_cache := Bitstring.dropbits (len*8) (!data_cache); 
@@ -376,51 +359,20 @@ let listen mgr loc init =
     let rs = Nettypes.ipv4_addr_to_string remote_addr in
     let data_cache = ref (Bitstring.empty_bitstring) in 
     Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port;
-
-(*
-   let rec echo () =                                                     
-     try_lwt                                                             
-       (*   lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in *)    
-       lwt hbuf = read_cache_data t data_cache (OP.Header.get_len ) in   
-       let ofh  = OP.Header.parse_h hbuf in                              
-       let dlen = ofh.OP.Header.len - OP.Header.get_len in               
-       (*   lwt dbuf = rd_data dlen t in *)                                
-       lwt dbuf = read_cache_data t data_cache dlen in                   
-       let ofp  = OP.parse ofh dbuf in                                   
-       process_of_packet st (remote_addr, remote_port) ofp t;            
-       echo ()                                                           
-     with                                                                
-       | Nettypes.Closed -> return ()                                    
-       | OP.Unparsed (m, bs) -> cp (sp "# unparsed! m=%s" m); echo ()    
-                                                                         
-   in echo ()                                                            
-   in                                                                    
-*)
-   
  
     let echo () =
         try_lwt 
-        (*         watchdog2(); *)
-(*           mem_dbg "before read"; *)
-(*           lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in *)
-(*             lwt _ = OS.Time.sleep 0.0 in  *)
             lwt hbuf = read_cache_data t data_cache (OP.Header.get_len ) in
-(*           Bitstring.hexdump_bitstring stdout hbuf;  *)
-            check_data_size OP.Header.get_len ((Bitstring.bitstring_length hbuf)/8); 
-(*           mem_dbg "init read"; *)
-          let ofh  = OP.Header.parse_h hbuf in
-(*           mem_dbg "init parse"; *)
-          let dlen = ofh.OP.Header.len - OP.Header.get_len in 
-          lwt dbuf = read_cache_data t data_cache dlen in 
-(*           Bitstring.hexdump_bitstring stdout dbuf;  *)
-(*           lwt dbuf = rd_data dlen t in *)
-(*           mem_dbg "read"; *)
-            check_data_size dlen ((Bitstring.bitstring_length dbuf)/8);           
-            let ofp  = OP.parse ofh dbuf in
-(*           mem_dbg "parse"; *)
-          lwt () = process_of_packet st (remote_addr, remote_port) ofp t in
-           (*mem_dbg "process"; *)
-          return true
+(*               check_data_size OP.Header.get_len ((Bitstring.bitstring_length
+ *               hbuf)/8);  *)
+              let ofh  = OP.Header.parse_h hbuf in
+              let dlen = ofh.OP.Header.len - OP.Header.get_len in 
+              lwt dbuf = read_cache_data t data_cache dlen in 
+(*                 check_data_size dlen ((Bitstring.bitstring_length dbuf)/8);
+ *                 *)
+                let ofp  = OP.parse ofh dbuf in
+                lwt () = process_of_packet st (remote_addr, remote_port) ofp t in
+                  return true
         with
           | Nettypes.Closed -> (
             let ep = {ip=remote_addr;port=remote_port} in 
