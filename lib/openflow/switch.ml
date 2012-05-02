@@ -164,8 +164,8 @@ module Switch = struct
     p_sflow: uint32; (** probability for sFlow sampling *)
     mutable errornum : uint32; 
     mutable portnum : int;
-    packet_queue : (Bitstring.t * port) Lwt_stream.t;
-    push_packet : ((Bitstring.t * port) option -> unit);
+    packet_queue : (Bitstring.t * string) Lwt_stream.t;
+    push_packet : ((Bitstring.t * string) option -> unit);
     mutable queue_len : int;
   }
 
@@ -196,6 +196,8 @@ module Switch = struct
         | OP.Port.Port(port) -> 
             if Hashtbl.mem st.int_ports port then(
               let out_p = (!( Hashtbl.find st.int_ports port))  in
+(*               Printf.printf "Outputing packet to port %s\n" out_p.port_name;
+ *               *)
                 Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
 (*
                 out_p.counter.Entry.tx_packets <- Int64.add
@@ -254,37 +256,171 @@ module Switch = struct
         Bitstring.put frame (start + len - 1) (Bitstring.get bits (len - 1));
         set_frame_bits frame start (len-1) bits
 
+  type pkt_header = 
+    {
+      mutable dl_dst : string;
+      mutable dl_src : string;
+      dl_type : int;
+      mutable dl_vlan : int;
+      mutable dl_vlan_pcp : char;
+      ihl : char;
+      mutable tos : char;
+      ip_hdr_1 : int64;
+      mutable nw_type : char;
+      ip_hdr_2 : int;
+      mutable nw_src : int32;
+      mutable nw_dst : int32;
+      ip_opt : Bitstring.t;
+      tp_src : int;
+      tp_dst : int;
+      data : Bitstring.t;
+    }
+
+  let pkt_hdr_of_bitstring bits = 
+    bitmatch bits with
+      (* TODO: add 802.11q case *)
+      (* TCP *)
+      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
+         ip_hdr_1:56; 6:8; ip_hdr_2:16; nw_src:32; nw_dst:32;
+         ip_opt:(ihl-5)*32:bitstring; tp_src:16; tp_dst:16; data:-1:bitstring}
+      -> { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); 
+           dl_vlan=0xffff; dl_vlan_pcp='\x01'; tos=(char_of_int tos); 
+           ip_hdr_1; nw_type='\x06'; ip_hdr_2; nw_src; nw_dst; ip_opt; 
+           tp_src; tp_dst; data; }
+      (* ICMP *)
+      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
+         ip_hdr_1:56; 1:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
+         ip_opt:(ihl-5)*32:bitstring; tp_src:16:littleendian; data:-1:bitstring} ->
+         { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); dl_vlan=0xffff; 
+           dl_vlan_pcp='\x01'; tos=(char_of_int tos); ip_hdr_1; nw_type='\x01'; 
+           ip_hdr_2; nw_src; nw_dst; ip_opt; tp_src; tp_dst=0; data; }
+        
+      (* UDP *)
+      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
+         ip_hdr_1:56; 17:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
+         ip_opt:(ihl-5)*32:bitstring; tp_src:16; tp_dst:16; 
+         data:-1:bitstring } 
+        -> { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl);
+        dl_vlan=0xffff; dl_vlan_pcp='\x01';
+          tos=(char_of_int tos); ip_hdr_1; nw_type='\x11'; ip_hdr_2; 
+          nw_src; nw_dst; ip_opt; tp_src; tp_dst; data; }
+        
+      (* IP *)
+      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
+         ip_hdr_1:56; nw_type:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
+         data:-1:bitstring } 
+        -> {  dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); 
+              dl_vlan=0xffff; dl_vlan_pcp='\x01'; tos=(char_of_int tos); 
+              ip_hdr_1; nw_type=(char_of_int nw_type); ip_hdr_2; nw_src; nw_dst; 
+              ip_opt=(Bitstring.empty_bitstring); tp_src=0; tp_dst=0; data; }
+         
+      (* Ethernet only *)
+      | {dl_dst:48:string; dl_src:48:string; dl_type:16; data:-1:bitstring}
+        -> { dl_dst; dl_src; dl_type; ihl='\x00'; dl_vlan=0xffff; dl_vlan_pcp='\x01';
+              tos='\x00'; ip_hdr_1=0L; nw_type='\x00'; 
+              ip_hdr_2=0; nw_src=0l; nw_dst=0l; 
+              ip_opt=(Bitstring.empty_bitstring); tp_src=0; tp_dst=0; data; }
+  let bitstring_of_pkt_hdr pkt_hdr = 
+    match (pkt_hdr.dl_type, pkt_hdr.nw_type) with
+    | (0x0800, '\x06')
+    | (0x0800, '\x17') ->
+      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
+      pkt_hdr.dl_type:16; 
+       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
+       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
+       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
+       pkt_hdr.ip_opt:-1:bitstring; pkt_hdr.tp_src:16; pkt_hdr.tp_dst:16; 
+       pkt_hdr.data:-1:bitstring}
+    | (0x0800, '\x01') ->
+      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
+      pkt_hdr.dl_type:16; 
+       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
+       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
+       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
+       pkt_hdr.ip_opt:-1:bitstring; pkt_hdr.tp_src:16; pkt_hdr.data:-1:bitstring}
+    | (0x0800, _) ->
+      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
+      pkt_hdr.dl_type:16; 
+       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
+       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
+       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
+       pkt_hdr.data:-1:bitstring}
+    | (_, _) ->
+      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
+      pkt_hdr.dl_type:16; pkt_hdr.data:-1:bitstring}
+
 
         (* Assumwe that action are valid. I will not get a flow that sets an ip
          * address unless it defines that the ethType is ip. Need to enforce
          * these rule in the parsing process of the flow_mod packets *)
-  let rec apply_of_actions st in_port actions frame = 
+  let rec apply_of_actions st in_port actions frame =
+    let modified = ref false in 
+    let m = ref None in 
+
+    let get_pkt_hdr frame = 
+      match !m with
+      | None -> let tupple = pkt_hdr_of_bitstring frame in 
+                  m := Some(tupple);
+                  tupple
+      |  Some(m) -> m
+    in
+      
     match actions with 
       | [] -> return ()
       | head :: actions ->
         match head with
-          | OP.Flow.Output (port, pkt_size) ->
+          | OP.Flow.Output (port, pkt_size) ->(
+(*
+            let m = (get_pkt_hdr frame) in 
+            let frame = if (!modified) then 
+                bitstring_of_pkt_hdr m 
+            else 
+              frame 
+            in
+*)
               forward_frame st in_port port frame pkt_size; 
-              apply_of_actions st in_port actions frame
+              apply_of_actions st in_port actions frame)
           | OP.Flow.Set_dl_src(eaddr) ->
              (* Printf.printf "setting src mac addr to %s\n" (OP.eaddr_to_string
               * eaddr); *)
-              set_frame_bits frame 48 48 (OP.bitstring_of_eaddr eaddr);
+               set_frame_bits frame 48 48 (OP.bitstring_of_eaddr eaddr); 
+(*
+               (get_pkt_hdr frame).dl_src <- eaddr;
+              modified := true;
+*)
               apply_of_actions st in_port actions frame
           | OP.Flow.Set_dl_dst(eaddr) ->
              (* Printf.printf "setting dst mac addr to %s\n" (OP.eaddr_to_string
               * eaddr); *)
+(*
               set_frame_bits frame 0 48 (OP.bitstring_of_eaddr eaddr);
-              apply_of_actions st in_port actions frame
+              let frame = 
+                bitmatch frame with 
+                | {_:48:bitstring; data:-1:bitstring} ->
+                    BITSTRING{eaddr:48:string; data:-1:bitstring} in
+*)
+              (get_pkt_hdr frame).dl_dst <- eaddr;
+              modified := true;
+              apply_of_actions st in_port actions frame 
           | OP.Flow.Set_nw_tos(tos) ->
                    set_frame_bits frame 160 8 (BITSTRING{(int_of_char tos):8}); 
                    apply_of_actions st in_port actions frame           
           | OP.Flow.Set_nw_src(ip) ->
-                  set_frame_bits frame 208 32 (BITSTRING{ip:32}); 
+                   set_frame_bits frame 208 32 (BITSTRING{ip:32});  
                   apply_of_actions st in_port actions frame
           | OP.Flow.Set_nw_dst(ip) ->
-                  set_frame_bits frame 240 32 (BITSTRING{ip:32}); 
-                  apply_of_actions st in_port actions frame
+(*                   set_frame_bits frame 240 32 (BITSTRING{ip:32});  *)
+(*
+              (get_pkt_hdr frame).nw_dst <- ip;
+              modified := true;
+*)
+              let frame = 
+                    bitmatch frame with
+                    | {head:240:bitstring;_:32:bitstring; data:-1:bitstring} ->
+                      BITSTRING{head:240:bitstring; ip:32;
+                      data:-1:bitstring}
+              in
+              apply_of_actions st in_port actions frame                   
           | OP.Flow.Set_tp_src(port) ->
                 (bitmatch frame with 
                   {ip_len:4:offset(116)} -> 
@@ -400,19 +536,19 @@ let process_frame intf_name frame =
 *)
     if ((Hashtbl.mem st.Switch.ports intf_name) 
         && (st.Switch.queue_len < 256)) then (
-      let p = (!(Hashtbl.find st.Switch.ports intf_name)) in
+(*       let p = (!(Hashtbl.find st.Switch.ports intf_name)) in *)
 (*       let in_port = (OP.Port.port_of_int p.Switch.port_id) in *)
       st.Switch.queue_len <- st.Switch.queue_len + 1;
-      return(st.Switch.push_packet (Some(frame, p)))
+      return(st.Switch.push_packet (Some(frame, intf_name)))
     ) else (
       return ()
     )
 
 (* return () 
  * let process_frame_depr intf_name frame =  *)
-let process_frame_inner p frame =
-(*   if (Hashtbl.mem st.Switch.ports intf_name ) then *)
-(*     let p = (!(Hashtbl.find st.Switch.ports intf_name)) in *)
+let process_frame_inner intf_name frame =
+   if (Hashtbl.mem st.Switch.ports intf_name ) then 
+     let p = (!(Hashtbl.find st.Switch.ports intf_name)) in 
   pkt_count := (Int64.add !pkt_count 1L);
   let _ = 
     if ((Int64.rem !pkt_count 1000L) = 0L) then
@@ -445,8 +581,11 @@ let process_frame_inner p frame =
             (OP.Flow.Set_tp_dst (1010));
             (OP.Flow.Output ((OP.Port.port_of_int 2),  2000)) ; ];
  *)
-            add_flow tupple [(OP.Flow.Output ((OP.Port.port_of_int 2),  2000)) ; ];
+(*
+             add_flow tupple [(OP.Flow.Output ((OP.Port.port_of_int 2),
+             2000)) ; ]; 
 
+*)
 
             let pkt_in = (OP.Packet_in.bitstring_of_pkt_in ~port:in_port
             ~reason:OP.Packet_in.NO_MATCH ~bits:frame ()) in 
@@ -463,10 +602,10 @@ let process_frame_inner p frame =
                 (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
             (!entry).Entry.counters.Entry.last_secs = (Int32.of_float (OS.Clock.time ()));
             Switch.apply_of_actions st tupple.OP.Match.in_port (!entry).Entry.actions frame
-(*
+
   else
       return (Printf.printf "Port %s not found\n%!" intf_name) 
-*)
+
 let proccess_packets () = 
   try_lwt 
   while_lwt true do 
