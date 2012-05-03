@@ -24,34 +24,42 @@ open Printf
 module Rx = struct
   
   type t = {
-    q: Bitstring.t Lwt_sequence.t; 
+    q: Bitstring.t option Lwt_sequence.t; 
+    wnd: Window.t;
     writers: unit Lwt.u Lwt_sequence.t;
-    readers: Bitstring.t Lwt.u Lwt_sequence.t;
+    readers: Bitstring.t option Lwt.u Lwt_sequence.t;
     mutable watcher: int32 Lwt_mvar.t option;
     mutable max_size: int32;
     mutable cur_size: int32;
   }
   
-  let create ~max_size =
+  let create ~max_size ~wnd =
     let q = Lwt_sequence.create () in
     let writers = Lwt_sequence.create () in
     let readers = Lwt_sequence.create () in
     let watcher = None in
     let cur_size = 0l in
-    { q; writers; readers; max_size; cur_size; watcher }
+    { q; wnd; writers; readers; max_size; cur_size; watcher }
   
   let notify_size_watcher t =
+    let rx_wnd = max 0l (Int32.sub t.max_size t.cur_size) in
+    Window.set_rx_wnd t.wnd rx_wnd;
     match t.watcher with
     |None -> return ()
     |Some w -> Lwt_mvar.put w t.cur_size
     
+  let seglen s =
+    match s with
+    | None -> 0 
+    | Some b -> (Bitstring.bitstring_length b / 8)
+
   let add_r t s =
     if t.cur_size > t.max_size then
       let th,u = Lwt.task () in
       let node = Lwt_sequence.add_r u t.writers in
       Lwt.on_cancel th (fun _ -> Lwt_sequence.remove node);
       (* Update size before blocking, which may push cur_size above max_size *)
-      t.cur_size <- Int32.(add t.cur_size (of_int (Bitstring.bitstring_length s / 8)));
+      t.cur_size <- Int32.(add t.cur_size (of_int (seglen s)));
       notify_size_watcher t >>
       lwt () = th in
       ignore(Lwt_sequence.add_r s t.q);
@@ -59,7 +67,7 @@ module Rx = struct
     else begin
       (match Lwt_sequence.take_opt_l t.readers with
       |None ->
-        t.cur_size <- Int32.(add t.cur_size (of_int (Bitstring.bitstring_length s / 8)));
+        t.cur_size <- Int32.(add t.cur_size (of_int (seglen s)));
         ignore(Lwt_sequence.add_r s t.q);
         notify_size_watcher t
       |Some u -> 
@@ -75,7 +83,7 @@ module Rx = struct
       th
     end else begin
       let s = Lwt_sequence.take_l t.q in
-      t.cur_size <- Int32.(sub t.cur_size (of_int (Bitstring.bitstring_length s / 8)));
+      t.cur_size <- Int32.(sub t.cur_size (of_int (seglen s)));
       notify_size_watcher t >>
       if t.cur_size < t.max_size then begin
         match Lwt_sequence.take_opt_l t.writers with
@@ -90,25 +98,7 @@ module Rx = struct
   
   let monitor t mvar =
     t.watcher <- Some mvar
-  
-  let set_max_size t new_max_size =
-    if new_max_size > t.max_size then (
-      (* the new max size is bigger than the current one, wake up
-         writers (if any) until queue is full or all writers have
-         written *)
-      let rec loop () =
-        if t.cur_size < t.max_size then
-          match Lwt_sequence.take_opt_l t.writers with
-          |Some w -> Lwt.wakeup w (); loop ()
-          |None -> ()
-      in
-      (* commit to the new length before waking up writers, because
-         writers might again increase the max length *)
-      t.max_size <- new_max_size;
-      loop ()
-    )
-    else if new_max_size > 0l then
-      t.max_size <- new_max_size
+
 end
 
 (* The transmit queue simply advertises how much data is allowed to be
@@ -160,6 +150,19 @@ module Tx = struct
       wait_for t sz
     end
 
+  (* Wait until the user buffer is flushed *)
+  let rec wait_for_flushed t =
+    if Lwt_sequence.is_empty t.buffer then begin
+      return ()
+    end
+    else begin
+      let th,u = Lwt.task () in
+      let node = Lwt_sequence.add_r u t.writers in
+      Lwt.on_cancel th (fun _ -> Lwt_sequence.remove node);
+      th >>
+      wait_for_flushed t
+    end
+
   let rec clear_buffer t = 
     let rec addon_more curr_data l =
       match Lwt_sequence.take_opt_l t.buffer with
@@ -201,7 +204,7 @@ module Tx = struct
         match get_pkt_to_send () with
         | None -> return ()
         | Some pkt -> 
-            Segment.Tx.output t.txq pkt >>
+            Segment.Tx.output ~flags:Segment.Tx.Psh t.txq pkt >>
             clear_buffer t
 
 
@@ -226,7 +229,7 @@ module Tx = struct
             let _ = Lwt_sequence.add_r data t.buffer in
             return ()
 	| false -> 
-            Segment.Tx.output t.txq data
+            Segment.Tx.output ~flags:Segment.Tx.Psh t.txq data
 
 
   let write_nodelay t data =
@@ -244,7 +247,7 @@ module Tx = struct
             let _ = Lwt_sequence.add_r data t.buffer in
             return ()
 	| false -> 
-            Segment.Tx.output t.txq data
+            Segment.Tx.output ~flags:Segment.Tx.Psh t.txq data
 
 
   let inform_app t = 

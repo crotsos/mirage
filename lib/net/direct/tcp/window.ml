@@ -19,14 +19,17 @@ open Printf
 
 type t = {
   tx_mss: int;
+  tx_isn: Sequence.t;
+  rx_isn: Sequence.t;
+  max_rx_wnd: int32;               (* Max RX Window size after scaling *)
+  tx_wnd_scale: int;               (* TX Window scaling option     *)
+  rx_wnd_scale: int;               (* RX Window scaling option     *)
   mutable snd_una: Sequence.t;
   mutable tx_nxt: Sequence.t;
   mutable rx_nxt: Sequence.t;
   mutable rx_nxt_inseq: Sequence.t;
   mutable tx_wnd: int32;           (* TX Window size after scaling *)
   mutable rx_wnd: int32;           (* RX Window size after scaling *)
-  mutable tx_wnd_scale: int;       (* TX Window scaling option     *)
-  mutable rx_wnd_scale: int;       (* RX Window scaling option     *)
   mutable ssthresh: int32;         (* threshold to switch from exponential
 				      slow start to linear congestion
 				      avoidance
@@ -60,15 +63,15 @@ let to_string t =
     t.rx_wnd t.tx_wnd (Sequence.to_string t.snd_una)
 
 (* Initialise the sequence space *)
-let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss =
-  (* XXX need random ISN XXX *)
-  let tx_nxt = Sequence.of_int32 7l in
+let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss ~tx_isn =
+  let tx_nxt = tx_isn in
   let rx_nxt = Sequence.(incr rx_isn) in
   let rx_nxt_inseq = Sequence.(incr rx_isn) in
   (* TODO: improve this sanity check of tx_mss *)
   let tx_mss = match tx_mss with |None -> default_mss |Some mss -> min mss max_mss in
   let snd_una = tx_nxt in
   let rx_wnd = Int32.(shift_left (of_int rx_wnd) rx_wnd_scale) in
+  let max_rx_wnd = rx_wnd in
   let tx_wnd = Int32.(shift_left (of_int tx_wnd) tx_wnd_scale) in
   (* ssthresh is initialized per RFC 2581 to a large value so slow-start
      can be used all the way till first loss *)
@@ -83,7 +86,8 @@ let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss =
   let rttvar = 0.0 in
   let rto = 3.0 in
   let backoff_count = 0 in
-  { snd_una; tx_nxt; tx_wnd; rx_nxt; rx_nxt_inseq; rx_wnd; tx_wnd_scale; rx_wnd_scale;
+  { tx_isn; rx_isn; max_rx_wnd; snd_una; tx_nxt; tx_wnd; rx_nxt; rx_nxt_inseq;
+    rx_wnd; tx_wnd_scale; rx_wnd_scale;
     ssthresh; cwnd; tx_mss; fast_recovery;
     rtt_timer_on; rtt_timer_reset;
     rtt_timer_seq; rtt_timer_starttime; srtt; rttvar; rto; backoff_count }
@@ -93,9 +97,7 @@ let t ~rx_wnd_scale ~tx_wnd_scale ~rx_wnd ~tx_wnd ~rx_isn ~tx_mss =
  *)
 let valid t seq =
   let redge = Sequence.(add t.rx_nxt (of_int32 t.rx_wnd)) in
-  (* TODO: change temp fix to real max advertised window of the connection,
-     deal with scaling etc *)
-  let ledge = Sequence.(sub t.rx_nxt (Sequence.of_int 65535)) in 
+  let ledge = Sequence.(sub t.rx_nxt (of_int32 t.max_rx_wnd)) in 
   let r = Sequence.between seq ledge redge in
   (* printf "TCP_window: valid check for seq=%s for range %s[%lu] res=%b\n%!"
     (Sequence.to_string seq) (Sequence.to_string t.rx_nxt) t.rx_wnd r; *)
@@ -113,6 +115,7 @@ let rx_advance_inseq t b =
 let rx_nxt t = t.rx_nxt 
 let rx_nxt_inseq t = t.rx_nxt_inseq
 let rx_wnd t = t.rx_wnd
+let rx_wnd_unscaled t = Int32.shift_right t.rx_wnd t.rx_wnd_scale
 
 (* TODO: scale the window down so we can advertise it correctly with
    window scaling on the wire *)
@@ -218,3 +221,11 @@ let backoff_rto t =
 
 let max_rexmits_done t =
   (t.backoff_count > 5)
+
+let tx_totalbytes t =
+  Sequence.(to_int (sub t.tx_nxt t.tx_isn))
+
+let rx_totalbytes t =
+  Sequence.(to_int (sub t.rx_nxt t.rx_isn))
+  
+
