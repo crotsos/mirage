@@ -719,6 +719,7 @@ module Switch :
   end
 val process_frame : string -> string * int * int -> unit Lwt.t
 val process_openflow : 'a -> unit Lwt.t
+val add_flow: OP.Match.t -> OP.Flow.action list -> unit
 val add_port : Switch.t -> Net.Manager.t -> Net.Manager.interface -> unit 
 val listen :
   Net.Manager.t -> Net.Nettypes.ipv4_src -> (Net.Manager.t -> Switch.t -> unit Lwt.t) -> unit Lwt.t

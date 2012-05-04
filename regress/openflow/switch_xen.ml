@@ -36,8 +36,21 @@ type switch_state = {
 let sw_details = {sw=[]; of_port=[];}
 
 let init controller sw =
+  
   sw_details.sw <- ([sw] @ sw_details.sw);
-  return ()
+(*  let wildcard = OP.Wildcards.({ in_port=false; dl_vlan=true; dl_src=true; 
+      dl_dst=true; dl_type=true; nw_proto=true; 
+      tp_src=true; tp_dst=true; nw_src=(char_of_int 32); 
+      nw_dst=(char_of_int 32); dl_vlan_pcp=true; nw_tos=true;}) in 
+  let of_match = OP.Match.create_flow_match wildcard
+                   ~in_port:1 () in 
+  let of_action = [(OP.Flow.Output ((OP.Port.port_of_int 2),  2000))] in 
+  Openflow.Switch.add_flow of_match of_action;
+  let of_match = OP.Match.create_flow_match wildcard
+                   ~in_port:2 () in 
+  let of_action = [(OP.Flow.Output ((OP.Port.port_of_int 1),  2000))] in 
+  Openflow.Switch.add_flow of_match of_action;*)
+    return ()
 
 
 let ip = Net.Nettypes.(
