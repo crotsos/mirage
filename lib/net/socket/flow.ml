@@ -100,43 +100,39 @@ let listen_tcpv4 addr port fn =
     fail (Listen_error "listen retry") (* Listen never blocks *)
 
 (* Read a buffer off the wire *)
-let rec read_buf t istr off len =
-  match R.read t.fd istr off len with
+let rec read_buf t buf off len =
+  match R.read t.fd buf off len with
   |R.Retry ->
     Activations.read t.fd >>
-    read_buf t istr off len
+    read_buf t buf off len
   |R.OK r -> return r
   |R.Err e -> fail (Read_error e)
 
-let rec write_buf t (buf,off,len) =
-  match R.write t.fd buf (off/8) (len/8) with 
+let rec write_buf t buf =
+  match R.write t.fd buf 0 (Cstruct.len buf) with
   |R.Retry ->
     Activations.write t.fd >>
-    write_buf t (buf,off,len)
+    write_buf t buf
   |R.OK amt ->
-    let amt = amt * 8 in
+    let len = Cstruct.len buf in
     if amt = len then return ()
-    else write_buf t (buf,(off+amt),(len-amt))
+    else write_buf t (Cstruct.shift buf amt)
   |R.Err e -> fail (Write_error e)
 
 let read t =
-  let buf = String.create 4096 in
-  lwt len = read_buf t buf 0 (String.length buf) in
+  let buf = OS.Io_page.get () in
+  lwt len = read_buf t buf 0 (Cstruct.len buf) in
   match len with
   |0 -> return None
-  |len -> return (Some (buf, 0, (len * 8)))
+  |len -> return (Some (Cstruct.sub buf 0 len))
 
 let write t bs =
   write_buf t bs
 
-(* For now this is the slow "just concat bitstrings"
-   but it should be rewritten to block intelligently based
-   on the available write space XXX TODO *)
-let writev t views =
-  let view = Bitstring.concat views in
-  write t view >>
-  return Bitstring.empty_bitstring
-
+(* TODO use writev: but do a set of writes for now *)
+let writev t pages =
+  Lwt_list.iter_s (write t) pages
+ 
 module TCPv4 = struct
   type t = [`tcpv4] fdwrap
   type mgr = Manager.t
@@ -181,19 +177,26 @@ module Pipe = struct
   type src = int (* process pid *)
   type dst = int (* process pid *)
 
-  type msg = Bitstring.t
+  type msg = OS.Io_page.t
 
   let read (rd,_) = read rd
   let write (_,wr) view = write wr view
 
-  (* For now this is the slow "just concat bitstrings"
-     but it should be rewritten to block intelligently based
-     on the available write space XXX TODO *)
-  let writev t views =
-    let view = Bitstring.concat views in
-    write t view >>
-    return Bitstring.empty_bitstring
-
+  let writev t pages =
+    match pages with
+    |[] -> return ()
+    |[page] -> write t page
+    |pages ->
+      let page = Io_page.get () in
+      let off = ref 0 in
+      List.iter (fun p ->
+        let len = Cstruct.len p in
+        Cstruct.blit_buffer p 0 page !off len;
+        off := !off + len;
+      ) pages;
+      let v = Cstruct.sub page 0 !off in
+      write t v
+ 
   let close (rd,wr) = close rd <&> (close wr)
 
   let listen mgr src fn =

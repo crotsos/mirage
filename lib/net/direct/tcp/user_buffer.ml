@@ -24,10 +24,10 @@ open Printf
 module Rx = struct
   
   type t = {
-    q: Bitstring.t option Lwt_sequence.t; 
+    q: OS.Io_page.t option Lwt_sequence.t; 
     wnd: Window.t;
     writers: unit Lwt.u Lwt_sequence.t;
-    readers: Bitstring.t option Lwt.u Lwt_sequence.t;
+    readers: OS.Io_page.t option Lwt.u Lwt_sequence.t;
     mutable watcher: int32 Lwt_mvar.t option;
     mutable max_size: int32;
     mutable cur_size: int32;
@@ -51,7 +51,7 @@ module Rx = struct
   let seglen s =
     match s with
     | None -> 0 
-    | Some b -> (Bitstring.bitstring_length b / 8)
+    | Some b -> Cstruct.len b
 
   let add_r t s =
     if t.cur_size > t.max_size then
@@ -112,7 +112,7 @@ module Tx = struct
     wnd: Window.t;
     writers: unit Lwt.u Lwt_sequence.t;
     txq: Segment.Tx.q;
-    buffer: Bitstring.t Lwt_sequence.t;
+    buffer: OS.Io_page.t Lwt_sequence.t;
     max_size: int32;
     mutable bufbytes: int32;
   }
@@ -124,7 +124,13 @@ module Tx = struct
     { wnd; writers; txq; buffer; max_size; bufbytes }
 
   let len data = 
-    Int32.of_int (Bitstring.bitstring_length data / 8)
+    Int32.of_int (Cstruct.len data)
+
+  let lenv datav =
+    match datav with
+    |[] -> 0l
+    |[d] -> Int32.of_int (Cstruct.len d)
+    |ds -> Int32.of_int (List.fold_left (fun a b -> Cstruct.len b + a) 0 ds)
 
   (* Check how many bytes are available to write to output buffer *)
   let available t = 
@@ -133,7 +139,7 @@ module Tx = struct
     | true -> 0l
     | false -> a
 
-  (* Check how many bytes are available to write to wire*)
+  (* Check how many bytes are available to write to wire *)
   let available_cwnd t = 
     Window.tx_available t.wnd
 
@@ -168,14 +174,14 @@ module Tx = struct
       match Lwt_sequence.take_opt_l t.buffer with
       | None ->
           (* printf "out at 1\n%!";*)
-	  Bitstring.concat (List.rev curr_data)
+	  List.rev curr_data
       | Some s ->
           let s_len = len s in
           match s_len > l with
           | true -> 
               (*printf "out at 2 %lu %lu\n%!" s_len l;*)
               let _ = Lwt_sequence.add_l s t.buffer in
-              Bitstring.concat (List.rev curr_data)
+              List.rev curr_data
           | false -> 
 	      t.bufbytes <- Int32.sub t.bufbytes s_len;
               addon_more (s::curr_data) (Int32.sub l s_len)
@@ -185,10 +191,18 @@ module Tx = struct
       let s = Lwt_sequence.take_l t.buffer in
       let s_len = len s in
       match s_len > avail_len with
-      | true -> 
-          (* not enough opened up - return pkt to buffer *)
-          let _ = Lwt_sequence.add_l s t.buffer in
-          None
+      | true ->  begin
+          match avail_len with
+          |0l -> (* return pkt to buffer *)
+            let _ = Lwt_sequence.add_l s t.buffer in
+            None
+          |_ -> (* split buffer into a partial write *)
+            let to_send,remaining = Cstruct.split s (Int32.to_int avail_len) in
+            (* queue remaining view *)
+            let _ = Lwt_sequence.add_l remaining t.buffer in
+            t.bufbytes <- Int32.sub t.bufbytes avail_len;
+            Some [to_send]
+      end
       | false -> 
           match s_len < avail_len with
           | true -> 
@@ -196,7 +210,7 @@ module Tx = struct
 	      Some (addon_more (s::[]) (Int32.sub avail_len s_len))
           | false -> 
 	      t.bufbytes <- Int32.sub t.bufbytes s_len;
-	      Some s
+	      Some [s]
     in
     match Lwt_sequence.is_empty t.buffer with
     | true -> return ()
@@ -207,16 +221,36 @@ module Tx = struct
             Segment.Tx.output ~flags:Segment.Tx.Psh t.txq pkt >>
             clear_buffer t
 
+  (* Chunk up the segments into MSS max for transmission *)
+  let transmit_segments ~mss ~txq datav =
+    let transmit acc = Segment.Tx.(output ~flags:Psh txq (List.rev acc)) in
+    let rec chunk datav acc =
+      match datav with
+      |[] -> begin
+        match acc with
+        |[] -> return ()
+        |_ -> transmit acc
+      end 
+      |hd::tl ->
+        let curlen = Cstruct.lenv acc in
+        let tlen = Cstruct.len hd + curlen in
+        if tlen > mss then begin
+          let a,b = Cstruct.split hd (mss - curlen) in
+          lwt () = transmit (a::acc) in
+          chunk (b::tl) []
+        end else
+          chunk tl (hd::acc)
+    in
+    chunk datav []
 
-
-  let write t data =
-    let l = len data in
+  let write t datav =
+    let l = lenv datav in
     let mss = Int32.of_int (Window.tx_mss t.wnd) in
     match Lwt_sequence.is_empty t.buffer &&
       (l = mss || not (Window.tx_inflight t.wnd)) with
     | false -> 
 	t.bufbytes <- Int32.add t.bufbytes l;
-        let _ = Lwt_sequence.add_r data t.buffer in
+        List.iter (fun data -> ignore(Lwt_sequence.add_r data t.buffer)) datav;
 	if t.bufbytes < mss then
           return ()
 	else
@@ -226,28 +260,29 @@ module Tx = struct
         match avail_len < l with
 	| true -> 
 	    t.bufbytes <- Int32.add t.bufbytes l;
-            let _ = Lwt_sequence.add_r data t.buffer in
+            List.iter (fun data -> ignore(Lwt_sequence.add_r data t.buffer)) datav;
             return ()
 	| false -> 
-            Segment.Tx.output ~flags:Segment.Tx.Psh t.txq data
-
-
-  let write_nodelay t data =
-    let l = len data in
+            let max_size = Window.tx_mss t.wnd in
+            transmit_segments ~mss:max_size ~txq:t.txq datav
+            
+  let write_nodelay t datav =
+    let l = lenv datav in
     match Lwt_sequence.is_empty t.buffer with
     | false -> 
 	t.bufbytes <- Int32.add t.bufbytes l;
-        let _ = Lwt_sequence.add_r data t.buffer in
+        List.iter (fun data -> ignore(Lwt_sequence.add_r data t.buffer)) datav;
         return ()
     | true -> 
 	let avail_len = available_cwnd t in
         match avail_len < l with
 	| true -> 
 	    t.bufbytes <- Int32.add t.bufbytes l;
-            let _ = Lwt_sequence.add_r data t.buffer in
+            List.iter (fun data -> ignore(Lwt_sequence.add_r data t.buffer)) datav;
             return ()
 	| false -> 
-            Segment.Tx.output ~flags:Segment.Tx.Psh t.txq data
+            let max_size = Window.tx_mss t.wnd in
+            transmit_segments ~mss:max_size ~txq:t.txq datav
 
 
   let inform_app t = 

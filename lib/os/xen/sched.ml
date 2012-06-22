@@ -1,5 +1,5 @@
 (*
- * Copyright (c) 2011 Anil Madhavapeddy <anil@recoil.org>
+ * Copyright (c) Citrix Systems Inc
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,6 +14,11 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-type t = Bitstring.t Lwt_stream.t
+type reason =
+  | Poweroff
+  | Reboot
+  | Suspend
+  | Crash
 
-val string_of_stream :  t -> string Lwt.t
+external shutdown: reason -> unit = "stub_sched_shutdown"
+

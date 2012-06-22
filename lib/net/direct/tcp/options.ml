@@ -17,6 +17,7 @@
 (* TCP options parsing *)
 
 type t =
+  |Noop
   |MSS of int                    (* RFC793 *)
   |Window_size_shift of int      (* RFC1323 2.2 *)
   |SACK_ok                       (* RFC2018 *)
@@ -26,73 +27,97 @@ type t =
 
 type ts = t list
 
-let rec parse bs acc =
-  bitmatch bs with
-  | { 0:8 } -> 
-      acc
-  | { 1:8; tl:-1:bitstring } -> 
-      parse tl acc
-  | { 2:8; 4:8; mss:16; tl:-1:bitstring } ->
-      parse tl (MSS mss :: acc)
-  | { 3:8; 3:8; shift:8; tl:-1:bitstring } ->
-      parse tl (Window_size_shift shift :: acc)
-  | { 4:8; 2:8; tl:-1:bitstring } ->
-      parse tl (SACK_ok :: acc)
-  | { 5:8; len:8; sack:len-2:bitstring; tl:-1:bitstring } ->
-      let num = (len - 2) / 8 in
-      let rec to_int32_list bs acc = function
-      |0 -> acc
-      |n ->
-        bitmatch bs with 
-        | { le:32; re:32; rest:-1:bitstring } ->
-          to_int32_list rest ((le,re) :: acc) (n-1)
-      in
-      let sacks = to_int32_list sack [] num in
-      parse tl (SACK sacks :: acc)
-  | { 8:8; 10:8; tsval:32; tsecr:32; tl:-1:bitstring } ->
-      parse tl (Timestamp (tsval,tsecr) :: acc)
-  | { kind:8; len:8; pkt:len-2:string; tl:-1:bitstring } ->
-      parse tl (Unknown (kind,pkt) :: acc)
-  | { _ } -> acc
+let unmarshal buf =
+  let open Cstruct in
+  let i = iter 
+    (fun buf -> 
+      match get_uint8 buf 0 with
+      |0 -> None   (* EOF *)
+      |1 -> Some 1 (* NOP *)
+      |n -> Some (get_uint8 buf 1)
+    )
+    (fun buf ->
+      match get_uint8 buf 0 with
+      |0 -> assert false
+      |1 -> Noop
+      |2 -> MSS (BE.get_uint16 buf 2)
+      |3 -> Window_size_shift (get_uint8 buf 2)
+      |4 -> SACK_ok
+      |5 -> 
+        let num = ((get_uint8 buf 1) - 2) / 8 in
+        let rec to_int32_list off acc = function
+          |0 -> acc
+          |n ->
+            let x = (BE.get_uint32 buf off), (BE.get_uint32 buf (off+4)) in
+            to_int32_list (off+8) (x::acc) (n-1)
+        in SACK (to_int32_list 2 [] num)
+      |8 -> Timestamp ((BE.get_uint32 buf 2), (BE.get_uint32 buf 6))
+      |n -> Unknown (n, (copy_buffer buf 2 (len buf - 2)))
+    ) buf in
+  fold (fun a b -> b :: a) i []
 
-let marshal ts = 
-  let tlen = ref 0 in
-  let opts = List.rev_map (function
-    |MSS sz ->
-       tlen := !tlen + 4;
-       (BITSTRING { 2:8; 4:8; sz:16 })
-    |Window_size_shift shift ->
-       tlen := !tlen + 3;
-       (BITSTRING { 3:8; 3:8; shift:8 })
-    |SACK_ok ->
-       tlen := !tlen + 2;
-       (BITSTRING { 4:8; 2:8 })
-    |SACK acks ->
-       let edges = Bitstring.concat (
-         List.map (fun (le,re) -> BITSTRING { le:32; re:32 }) acks) in
-       let len = List.length acks * 8 + 2 in
-       tlen := !tlen + len;
-       (BITSTRING { 5:8; len:8; edges:-1:bitstring })
-    |Timestamp (tsval,tsecr) ->
-       tlen := !tlen + 10;
-       (BITSTRING { 8:8; 10:8; tsval:32; tsecr:32 })
-    |Unknown (kind,contents) ->
-       let len = String.length contents + 2 in
-       tlen := !tlen + len;
-       (BITSTRING { kind:8; len:8; contents:-1:string })
-  ) ts in
-  match opts with 
-  |[] -> Bitstring.empty_bitstring
-  |opts ->
-    let padlen = ((4 - (!tlen mod 4)) mod 4) * 8 in
-    Bitstring.concat ( match padlen with
-                       | 0 -> opts
-                       | _ -> (List.rev ((BITSTRING { 0L:padlen }) :: opts)))
+let write_iter buf = 
+  let open Cstruct in
+  let set_tlen t l = set_uint8 buf 0 t; set_uint8 buf 1 l in
+  function
+  |Noop ->
+    set_uint8 buf 0 1;
+    1
+  |MSS sz ->
+    set_tlen 2 4;
+    BE.set_uint16 buf 2 sz;
+    4
+  |Window_size_shift shift ->
+    set_tlen 3 3;
+    set_uint8 buf 2 shift;
+    3
+  |SACK_ok ->
+    set_tlen 4 2;
+    2
+  |SACK acks ->
+    let tlen = (List.length acks * 8) + 2 in
+    set_tlen 5 tlen;
+    let rec fn off = function
+     |(le,re)::tl ->
+        BE.set_uint32 buf off le;
+        BE.set_uint32 buf (off+4) re;
+        fn (off+8) tl
+     |[] -> () in
+    fn 2 acks;
+    tlen
+  |Timestamp (tsval,tsecr) ->
+    set_tlen 8 10;
+    BE.set_uint32 buf 2 tsval;
+    BE.set_uint32 buf 6 tsecr;
+    10
+  |Unknown (kind,contents) ->
+    let tlen = String.length contents in
+    set_tlen kind tlen;
+    set_buffer contents 0 buf 0 tlen;
+    tlen
 
-let of_packet bs =
-  parse bs []
+let marshal buf ts =
+  let open Cstruct in
+  (* Apply the write iterator on each stamp *)
+  let rec write fn off buf =
+    function
+    |hd::tl ->
+      let wlen = fn buf hd in
+      let buf = shift buf wlen in
+      write fn (off+wlen) buf tl
+    |[] -> off
+  in
+  let tlen = write write_iter 0 buf ts in
+  (* add padding to word length *)
+  match (4 - (tlen mod 4)) mod 4 with
+  |0 -> tlen
+  |1 -> set_uint8 buf tlen 0; tlen+1
+  |2 -> set_uint8 buf tlen 0; set_uint8 buf (tlen+1) 0; tlen+2
+  |3 -> set_uint8 buf tlen 0; set_uint8 buf (tlen+1) 0; set_uint8 buf (tlen+2) 0; tlen+3
+  |_ -> assert false
 
 let to_string = function
+  |Noop -> "Noop"
   |MSS m -> Printf.sprintf "MSS=%d" m
   |Window_size_shift b -> Printf.sprintf "Window>>%d" b
   |SACK_ok -> "SACK_ok"

@@ -22,6 +22,7 @@
 
 #include <caml/mlvalues.h>
 #include <caml/memory.h>
+#include <caml/bigarray.h>
 
 #include <log.h>
 
@@ -52,12 +53,18 @@ gnttab_grant_access(grant_ref_t ref, void *page, int domid, int ro)
     gnttab_table[ref].flags = GTF_permit_access | (ro * GTF_readonly);
 }
 
+/* An Io_page is an OCaml bigarray value with CAML_BA_MANAGED. If this has a
+ * proxy set, then that points to the *base* of the data, and the array->data
+ * is a pointer into a sub-view of that.
+ * This grant function always grants the base page rather than the current
+ * view, since grants have to be page-aligned */
 CAMLprim value
-caml_gnttab_grant_access(value v_ref, value v_bs, value v_domid, value v_readonly)
+caml_gnttab_grant_access(value v_ref, value v_iopage, value v_domid, value v_readonly)
 {
-    CAMLparam4(v_ref, v_bs, v_domid, v_readonly);
+    CAMLparam4(v_ref, v_iopage, v_domid, v_readonly);
     grant_ref_t ref = Int32_val(v_ref);
-    char *page = String_val(Field(v_bs, 0)) + (Int_val(Field(v_bs,1)) / 8);
+    struct caml_ba_array *a = (struct caml_ba_array *)Caml_ba_array_val(v_iopage);
+    void *page = (a->proxy == NULL) ? a->data : a->proxy->data;
     ASSERT(((unsigned long)page) % PAGE_SIZE == 0);
     gnttab_grant_access(ref, page, Int_val(v_domid), Bool_val(v_readonly));
     CAMLreturn(Val_unit);

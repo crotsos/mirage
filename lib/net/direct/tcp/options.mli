@@ -15,6 +15,7 @@
  *)
 
 type t =
+  |Noop
   |MSS of int                      (* RFC793 *)
   |Window_size_shift of int        (* RFC1323 2.2 *)
   |SACK_ok                         (* RFC2018 *)
@@ -23,6 +24,6 @@ type t =
   |Unknown of int * string         (* RFC793 *)
 
 type ts = t list
-val marshal: ts -> Bitstring.t
-val of_packet : Bitstring.t -> t list
+val marshal: OS.Io_page.t -> t list -> int
+val unmarshal : OS.Io_page.t -> t list
 val prettyprint : t list -> string

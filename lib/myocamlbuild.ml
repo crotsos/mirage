@@ -28,6 +28,10 @@ let debug =
   let e = getenv "MIR-DEBUG" ~default:"0" in
   match e with "0" -> false | _ -> true
 
+let trace =
+  let e = getenv "MIR-TRACE" ~default:"0" in
+  match e with "0" -> false | _ -> true
+
 let profiling = false
 (* In case you have problems with natdynlink, set this to false *)
 let native_p4 = true
@@ -228,13 +232,6 @@ let () =
     rule (ps "cp %s -> %s std" dep prod) ~prod ~dep (fun env builder -> cp dep prod)
   ) files
 
-(* Need to register manual dependency on libev included files/
-   The C files below are #included, so need to be present but are
-   not picked up by dependency analysis *)
-let libev_files = List.map (fun x -> "os/runtime_unix/" ^ x)
-  ["ev.h"; "ev_vars.h"; "ev_wrap.h"; "ev.c"; "byteswap.h";
-   "ev_select.c"; "ev_epoll.c"; "ev_kqueue.c"; "ev_poll.c"; "ev_port.c"]
-
 let pack_in_one out header files env builder =
   let packer = "../../../tools/ocp-pack/_build/pack.native" in
   Cmd (S ([A packer; A"-o"; Px out; A"-mli"] @ (List.map (fun x -> A x) files)))
@@ -290,13 +287,18 @@ let _ = dispatch begin function
     let p4_build = "../../../syntax/_build" in
     let camlp4_bc =
       S[A"-pp"; 
-        A (ps "camlp4o -I %s str.cma pa_mirage.cma -cow-no-open %s" 
-             p4_build (if debug then "-lwt-debug" else ""))] 
+        A (ps "camlp4o -I %s str.cma pa_mirage.cma -cow-no-open %s %s" 
+             p4_build (if debug then "-lwt-debug" else "")
+             (if trace then "pa_trace.cma" else "")
+          )
+       ] 
     in
     let camlp4_nc = 
       S[A"-pp";
-        A (ps "camlp4o.opt -I %s str.cmxs pa_mirage.cmxs -cow-no-open %s"
-             p4_build (if debug then "-lwt-debug" else ""))] 
+        A (ps "camlp4o.opt -I %s str.cmxs pa_mirage.cmxs -cow-no-open %s %s"
+             p4_build (if debug then "-lwt-debug" else "")
+             (if trace then "pa_trace.cmxs" else "")
+          )] 
     in
     let camlp4_cmd = if native_p4 then camlp4_nc else camlp4_bc in
     flag ["ocaml"; "compile" ; "pa_mirage"] & camlp4_cmd;
@@ -309,9 +311,6 @@ let _ = dispatch begin function
     Pathname.define_context "net/direct" ["net/direct/tcp"; "net/direct/dhcp" ];
     Pathname.define_context "net/direct/dhcp" ["net/direct" ];
     Pathname.define_context "net/direct/tcp" ["net/direct" ];
-
-    (* some C code will use local ev.h *)
-    dep  ["c"; "compile"; "include_libev"] libev_files;
 
     (* base cflags for C code *)
     flag ["c"; "compile"] & S CC.cc_cflags;

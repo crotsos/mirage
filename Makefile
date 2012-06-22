@@ -14,8 +14,11 @@ export PREFIX
 JOBS ?= -j 6
 export JOBS
 
-MIR-DEBUG ?= 0
+MIR-DEBUG ?= 1
 export MIR-DEBUG
+
+MIR-TRACE ?= 0
+export MIR-TRACE
 
 all:
 	@cd tools && $(MAKE)

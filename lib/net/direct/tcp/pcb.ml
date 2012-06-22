@@ -1,5 +1,5 @@
 (*
- * Copyright (c) 2010-2011 Anil Madhavapeddy <anil@recoil.org>
+ * Copyright (c) 2010-2012 Anil Madhavapeddy <anil@recoil.org>
  * Copyright (c) 2012 Balraj Singh <bs375@cl.cam.ac.uk>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -19,13 +19,7 @@ open Lwt
 open Nettypes
 open Printf
 open State
-
-type id = {
-  dest_port: int;               (* Remote TCP port *)
-  dest_ip: ipv4_addr;           (* Remote IP address *)
-  local_port: int;              (* Local TCP port *)
-  local_ip: ipv4_addr;          (* Local IP address *)
-}
+open Wire
 
 type pcb = {
   id: id;
@@ -33,11 +27,11 @@ type pcb = {
   rxq: Segment.Rx.q;        (* Received segments queue for out-of-order data *)
   txq: Segment.Tx.q;        (* Transmit segments queue *)
   ack: Ack.Delayed.t;       (* Ack state *)
-  state: State.t;     (* Connection state *)
-  urx: User_buffer.Rx.t;         (* App rx buffer *)
-  urx_close_t: unit Lwt.t;      (* App rx close thread *)
-  urx_close_u: unit Lwt.u;      (* App rx connection close wakener *)
-  utx: User_buffer.Tx.t;         (* App tx buffer *)
+  state: State.t;           (* Connection state *)
+  urx: User_buffer.Rx.t;    (* App rx buffer *)
+  urx_close_t: unit Lwt.t;  (* App rx close thread *)
+  urx_close_u: unit Lwt.u;  (* App rx connection close wakener *)
+  utx: User_buffer.Tx.t;    (* App tx buffer *)
 }
 
 type connection = (pcb * unit Lwt.t) 
@@ -60,80 +54,40 @@ type listener = {
 (* TODO: implement *)
 let verify_checksum pkt = true
 
+let wscale_default = 2
+
 module Tx = struct
 
-  exception IO_error
-
-  let checksum ~src ~dst pkt =
-    let src = ipv4_addr_to_uint32 src in
-    let dst = ipv4_addr_to_uint32 dst in
-    let len = (List.fold_left (fun a b -> Bitstring.bitstring_length b + a) 0 pkt) / 8 in
-    let pseudo_header = BITSTRING { src:32; dst:32; 0:8; 6:8; len:16 } in
-    Checksum.ones_complement_list (pseudo_header :: pkt)
-
-  (* Output a general TCP packet, checksum it, and if a reference is provided,
-     also record the sent packet for retranmission purposes *)
-  let xmit ip id ~flags ~rx_ack ~seq ~window ~options data =
-    let {dest_port; dest_ip; local_port; local_ip} = id in
-    let rst = flags = Segment.Tx.Rst in
-    let syn = flags = Segment.Tx.Syn in
-    let fin = flags = Segment.Tx.Fin in
-    let psh = flags = Segment.Tx.Psh in
-    let ack = match rx_ack with Some _ -> true |None -> false in
-    let ack_number = match rx_ack with Some n -> Sequence.to_int32 n |None -> 0l in
-    let sequence = Sequence.to_int32 seq in
-    (* printf "TCP xmit: dest_ip=%s %s%s%s%sseq=%lu ack=%lu\n%!" (ipv4_addr_to_string dest_ip)
-      (if rst then "RST " else "") (if syn then "SYN " else "")
-      (if fin then "FIN " else "") (if ack then "ACK " else "") sequence ack_number; *)
-    let options = Options.marshal options in
-    let data_offset = (Bitstring.bitstring_length options + 160) / 32 in
-    let header = BITSTRING {
-      local_port:16; dest_port:16; sequence:32; ack_number:32; 
-      data_offset:4; 0:6; false:1; ack:1; psh:1; rst:1; syn:1; fin:1; window:16; 
-      0:16; 0:16 } in
-    let frame = [header;options;data] in
-    let checksum = checksum ~src:local_ip ~dst:dest_ip frame in
-    let checksum_bs,_,_ = BITSTRING { checksum:16 } in
-    let header_buf,_,_ = header in
-    header_buf.[16] <- checksum_bs.[0];
-    header_buf.[17] <- checksum_bs.[1];
-    Ipv4.output ip ~proto:`TCP ~dest_ip frame >>
-    return frame
-
   (* Output a TCP packet, and calculate some settings from a state descriptor *)
-  let xmit_pcb ip id ~flags ~wnd ~options ~seq data =
+  let xmit_pcb ip id ~flags ~wnd ~options ~seq datav =
     let window = Int32.to_int (Window.rx_wnd_unscaled wnd) in
     let rx_ack = Some (Window.rx_nxt wnd) in
-    xmit ip id ~flags ~rx_ack ~seq ~window ~options data
+    let syn = match flags with Segment.Tx.Syn -> true |_ -> false in
+    let fin = match flags with Segment.Tx.Fin -> true |_ -> false in
+    let rst = match flags with Segment.Tx.Rst -> true |_ -> false in
+    let psh = match flags with Segment.Tx.Psh -> true |_ -> false in
+    xmit ~ip ~id ~syn ~fin ~rst ~psh ~rx_ack ~seq ~window ~options datav
 
   (* Output an RST response when we dont have a PCB *)
-  let send_rst t id ~sequence ~ack_number ~syn ~fin ~data =
-    let datalen = Int32.of_int ((Bitstring.bitstring_length data / 8) +
-                  (if syn then 1 else 0) + (if fin then 1 else 0)) in
+  let send_rst {ip} id ~sequence ~ack_number ~syn ~fin (* ~data *) =
+    (* XXX XXX what is data for here? -avsm *)
+    let datalen = Int32.add (if syn then 1l else 0l) (if fin then 1l else 0l) in
     let window = 0 in
     let options = [] in
     let seq = Sequence.of_int32 ack_number in
     let rx_ack = Some (Sequence.of_int32 (Int32.add sequence datalen)) in
-    xmit t.ip id ~flags:Segment.Tx.Rst ~rx_ack ~seq ~window ~options ("",0,0) >>
-    return ()
+    xmit ~ip ~id ~rst:true ~rx_ack ~seq ~window ~options []
 
   (* Output a SYN packet *)
-  let send_syn t id ~tx_isn ~options ~window = 
-    let seq = tx_isn in
-    let rx_ack = None in
-    let data = "",0,0 in
-    xmit t.ip id ~flags:Segment.Tx.Syn ~rx_ack ~seq ~window ~options data >>
-    return ()
+  let send_syn {ip} id ~tx_isn ~options ~window = 
+    xmit ~ip ~id ~syn:true ~rx_ack:None ~seq:tx_isn ~window ~options []
 
   (* Queue up an immediate close segment *)
   let close pcb =
     match state pcb.state with
     | Established | Close_wait ->
       User_buffer.Tx.wait_for_flushed pcb.utx >>
-      let seq = Window.tx_nxt pcb.wnd in
-      tick pcb.state (Send_fin seq);
-      let data = "",0,0 in
-      Segment.Tx.output ~flags:Segment.Tx.Fin pcb.txq data
+      Segment.Tx.output ~flags:Segment.Tx.Fin pcb.txq []
     |_ -> return ()
      
   (* Thread that transmits ACKs in response to received packets,
@@ -148,10 +102,9 @@ module Tx = struct
       let ack_number = Window.rx_nxt wnd in
       let flags = Segment.Tx.No_flags in
       let options = [] in
-      let data = "",0,0 in
       let seq = Window.tx_nxt wnd in
       Ack.Delayed.transmit ack ack_number >>
-      xmit_pcb t.ip pcb.id ~flags ~wnd ~options ~seq data >>
+      xmit_pcb t.ip pcb.id ~flags ~wnd ~options ~seq [] >>
       send_empty_ack () in
     (* When something transmits an ACK, tell the delayed ACK thread *)
     let rec notify () =
@@ -159,7 +112,6 @@ module Tx = struct
       Ack.Delayed.transmit ack ack_number >>
       notify () in
     send_empty_ack () <&> (notify ())
-
 end
 
 module Rx = struct
@@ -171,19 +123,17 @@ module Rx = struct
     | false -> return (printf "RX.input: checksum error\n%!")
     | true ->
 	(* URG_TODO: Deal correctly with incomming RST segment *)
-        bitmatch pkt with
-        | { sequence:32:bind(Sequence.of_int32 sequence);
-            ack_number:32:bind(Sequence.of_int32 ack_number); 
-            data_offset:4:bind(data_offset * 32); _:6;
-            urg:1; ack:1; psh:1; rst:1; syn:1; fin:1; window:16; 
-            checksum: 16; urg_ptr: 16; options:data_offset-160:bitstring;
-            data:-1:bitstring } ->
-              let _ = Options.of_packet options in
-              let seg = Segment.Rx.make ~sequence ~fin ~syn ~ack ~ack_number ~window ~data in
-              let {rxq} = pcb in
-              (* Coalesce any outstanding segments and retrieve ready segments *)
-              Segment.Rx.input rxq seg
-        | { _ } -> return (printf "RX.input: unknown\n%!")
+        let sequence = Sequence.of_int32 (Wire.get_tcpv4_sequence pkt) in
+        let ack_number = Sequence.of_int32 (Wire.get_tcpv4_ack_number pkt) in
+        let fin = Wire.get_fin pkt in
+        let syn = Wire.get_syn pkt in
+        let ack = Wire.get_ack pkt in
+        let window = Wire.get_tcpv4_window pkt in
+        let data = Wire.get_payload pkt in
+        let seg = Segment.Rx.make ~sequence ~fin ~syn ~ack ~ack_number ~window ~data in
+        let {rxq} = pcb in
+        (* Coalesce any outstanding segments and retrieve ready segments *)
+        Segment.Rx.input rxq seg
    
   (* Thread that spools the data into an application receive buffer,
      and notifies the ACK subsystem that new data is here *)
@@ -261,6 +211,12 @@ let clearpcb t id tx_isn =
 	  printf "TCP: error in removing pcb - no such connection\n%!"
 
 
+let pcb_allocs = ref 0
+let th_allocs = ref 0
+let pcb_frees = ref 0
+let th_frees = ref 0
+
+
 let new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_isn id =
   (* Set up the windowing variables *)
   let rx_isn = Sequence.of_int32 sequence in
@@ -285,7 +241,7 @@ let new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_
   let state = State.t ~on_close in
   let txq, tx_t = Segment.Tx.q ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state ~rx_ack ~tx_ack ~tx_wnd_update in
   (* The user application transmit buffer *)
-  let utx = User_buffer.Tx.create ~max_size:16384l ~wnd ~txq in
+  let utx = User_buffer.Tx.create ~wnd ~txq ~max_size:16384l in
   let rxq = Segment.Rx.q ~rx_data ~wnd ~state ~tx_ack in
   (* Set up ACK module *)
   let ack = Ack.Delayed.t ~send_ack ~last:(Sequence.incr rx_isn) in
@@ -298,7 +254,13 @@ let new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_
     (Rx.thread pcb ~rx_data) <?>
     (Wnd.thread ~utx ~urx ~wnd ~tx_wnd_update)
   in
-  pcb, th
+  pcb_allocs := !pcb_allocs + 1;
+  th_allocs := !th_allocs + 1;
+  let fnpcb = fun x -> pcb_frees := !pcb_frees + 1 in
+  let fnth = fun x -> th_frees := !th_frees + 1 in
+  Gc.finalise fnpcb pcb;
+  Gc.finalise fnth th;
+  return (pcb, th)
 
 
 let resolve_wnd_scaling options rx_wnd_scaleoffer = 
@@ -310,46 +272,38 @@ let resolve_wnd_scaling options rx_wnd_scaleoffer =
 
 
 let new_server_connection t ~tx_wnd ~sequence ~options ~tx_isn ~rx_wnd ~rx_wnd_scaleoffer ~pushf id =
-  let options = Options.of_packet options in
   let tx_mss = List.fold_left (fun a -> function Options.MSS m -> Some m |_ -> a) None options in
   let (rx_wnd_scale, tx_wnd_scale), opts = resolve_wnd_scaling options rx_wnd_scaleoffer in
-  let pcb, th = new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_isn id in
+  lwt pcb, th = new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_isn id in
   State.tick pcb.state State.Passive_open;
   State.tick pcb.state (State.Send_synack tx_isn);
   (* Add the PCB to our listens table *)
-  Hashtbl.add t.listens id (tx_isn, (pushf, (pcb, th)));
+  Hashtbl.replace t.listens id (tx_isn, (pushf, (pcb, th)));
   (* Queue a SYN ACK for transmission *)
   let options = Options.MSS 1460 :: opts in
-  Segment.Tx.output ~flags:Segment.Tx.Syn ~options pcb.txq ("",0,0) >>
+  lwt () = Segment.Tx.output ~flags:Segment.Tx.Syn ~options pcb.txq [] in
   return (pcb, th)
 
 
 let new_client_connection t ~tx_wnd ~sequence ~ack_number ~options ~tx_isn ~rx_wnd ~rx_wnd_scaleoffer id =
-  let options = Options.of_packet options in
   let tx_mss = List.fold_left (fun a -> function Options.MSS m -> Some m |_ -> a) None options in
   let (rx_wnd_scale, tx_wnd_scale), _ = resolve_wnd_scaling options rx_wnd_scaleoffer in
-  let pcb, th = new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_isn:(Sequence.incr tx_isn) id in
+  lwt pcb, th = new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_isn:(Sequence.incr tx_isn) id in
   (* A hack here because we create the pcb only after the SYN-ACK is rx-ed*)
   State.tick pcb.state (State.Send_syn tx_isn);
   (* Add the PCB to our connection table *)
   Hashtbl.add t.channels id (pcb, th);
   State.tick pcb.state (State.Recv_synack (Sequence.of_int32 ack_number));
   (* xmit ACK *)  
-  Segment.Tx.output pcb.txq ("",0,0) >>
+  lwt () = Segment.Tx.output pcb.txq [] in
   return (pcb, th)
 
 let input_no_pcb t pkt id =
   (* TODO: implement verify checksum *)
   match verify_checksum pkt with
-  | false -> return (printf "RX.input: checksum error\n%!")
-  | true ->
-    bitmatch pkt with
-    | { sequence:32; ack_number:32; 
-        data_offset:4:bind(data_offset * 32); _:6;
-        urg:1; ack:1; psh:1; rst:1; syn:1; fin:1; window:16; 
-        checksum: 16; urg_ptr: 16; options:data_offset-160:bitstring;
-        data:-1:bitstring } ->
-      match rst with
+  |false -> return (printf "RX.input: checksum error\n%!")
+  |true ->
+      match Wire.get_rst pkt with
       |true -> begin
         match (hashtbl_find t.connects id) with
         | Some (wakener, _) -> begin
@@ -371,18 +325,23 @@ let input_no_pcb t pkt id =
             return ()
       end
       |false -> begin
+        let sequence = Wire.get_tcpv4_sequence pkt in
+        let options = Wire.get_options pkt in
+        let ack_number = Wire.get_tcpv4_ack_number pkt in
+        let syn = Wire.get_syn pkt in
+        let fin = Wire.get_fin pkt in
         match syn with
         | true -> begin
-          match ack with
+          match Wire.get_ack pkt with
           | true -> begin
             match (hashtbl_find t.connects id) with
             | Some (wakener, tx_isn) -> begin
               if Sequence.(to_int32 (incr tx_isn)) = ack_number then begin
                 Hashtbl.remove t.connects id;
-		let tx_wnd = window in
+		let tx_wnd = Wire.get_tcpv4_window pkt in
 		let rx_wnd = 65535 in
 		(* TODO: fix hardcoded value - it assumes that this value was sent in the SYN *)
-		let rx_wnd_scaleoffer = 2 in
+		let rx_wnd_scaleoffer = wscale_default in
                 lwt (pcb, th) = new_client_connection
                   t ~tx_wnd ~sequence ~ack_number ~options ~tx_isn ~rx_wnd ~rx_wnd_scaleoffer id in
                 Lwt.wakeup wakener (Some (pcb, th));
@@ -396,27 +355,27 @@ let input_no_pcb t pkt id =
             | None -> 
               (* Incomming SYN-ACK with no pending connect
                  and no matching pcb - send RST *)
-              Tx.send_rst t id ~sequence ~ack_number ~syn ~fin ~data
+              Tx.send_rst t id ~sequence ~ack_number ~syn ~fin
           end
           | false -> begin
             match (hashtbl_find t.listeners id.local_port) with
             | Some (_, pushf) -> begin
               let tx_isn = Sequence.of_int ((Random.int 65535) + 0xCAFE0000) in
-	      let tx_wnd = window in
+	      let tx_wnd = Wire.get_tcpv4_window pkt in
 	      (* TODO: make this configurable per listener *)
 	      let rx_wnd = 65535 in
-	      let rx_wnd_scaleoffer = 2 in
+	      let rx_wnd_scaleoffer = wscale_default in
               lwt newconn = new_server_connection
 		t ~tx_wnd ~sequence ~options ~tx_isn ~rx_wnd ~rx_wnd_scaleoffer ~pushf id in
               return ()
             end
             | None -> begin
-              Tx.send_rst t id ~sequence ~ack_number ~syn ~fin ~data
+              Tx.send_rst t id ~sequence ~ack_number ~syn ~fin
             end
           end
         end
         | false -> begin
-          match ack with
+          match Wire.get_ack pkt with
           | true -> begin
             match (hashtbl_find t.listens id) with
             | Some (tx_isn, (pushf, newconn)) -> begin
@@ -439,7 +398,7 @@ let input_no_pcb t pkt id =
                 return ()
               | None ->
                 (* ACK but no matching pcb and no listen - send RST *)
-                Tx.send_rst t id ~sequence ~ack_number ~syn ~fin ~data
+                Tx.send_rst t id ~sequence ~ack_number ~syn ~fin
           end
           | false ->
             (* What the hell is this packet? No SYN,ACK,RST *)
@@ -450,17 +409,15 @@ let input_no_pcb t pkt id =
 
 (* Main input function for TCP packets *)
 let input t ~src ~dst data =
-  bitmatch data with
-  | { source_port:16; dest_port:16; pkt:-1:bitstring } ->
-        let id = { local_port=dest_port; dest_ip=src; local_ip=dst; dest_port=source_port } in
-        (* Lookup connection from the active PCB hash *)
-        with_hashtbl t.channels id
-          (* PCB exists, so continue the connection state machine in tcp_input *)
-           (Rx.input t pkt)
-          (* No existing PCB, so check if it is a SYN for a listening function *)
-           (input_no_pcb t pkt)
-  | { _ } -> 
-        return (printf "TCP: input, unknown header, dropping\n%!")
+  let source_port = Wire.get_tcpv4_src_port data in
+  let dest_port = Wire.get_tcpv4_dst_port data in
+  let id = { local_port=dest_port; dest_ip=src; local_ip=dst; dest_port=source_port } in
+  (* Lookup connection from the active PCB hash *)
+  with_hashtbl t.channels id
+    (* PCB exists, so continue the connection state machine in tcp_input *)
+    (Rx.input t data)
+    (* No existing PCB, so check if it is a SYN for a listening function *)
+    (input_no_pcb t data)
 
 (* Blocking read on a PCB *)
 let rec read pcb =
@@ -471,7 +428,7 @@ let rec read pcb =
 let write_available pcb =
   (* Our effective outgoing MTU is what can fit in a page *)
   min 4000 (min (Window.tx_mss pcb.wnd)
-	      (Int32.to_int (User_buffer.Tx.available pcb.utx)))
+              (Int32.to_int (User_buffer.Tx.available pcb.utx)))
 
 (* URG_TODO: raise exception if not in Established or Close_wait state *)
 (* Wait for more write space *)
@@ -481,13 +438,8 @@ let write_wait_for pcb sz =
 (* URG_TODO: raise exception when trying to write to closed connection
              instead of quietly returning *)
 (* Write a segment *)
-let write pcb data =
-  User_buffer.Tx.write pcb.utx data
-
-(* URG_TODO: raise exception when trying to write to closed connection *)
-(* Write a segment without using Nagle's algorithm*)
-let write_nodelay pcb data =
-  User_buffer.Tx.write_nodelay pcb.utx data
+let writev pcb data = User_buffer.Tx.write pcb.utx data
+let write pcb data = User_buffer.Tx.write pcb.utx [data]
 
 (* Close - no more will be written *)
 let close pcb =
@@ -505,7 +457,10 @@ let closelistener l =
 let get_dest pcb =
   (pcb.id.dest_ip, pcb.id.dest_port)
 
-let localport = ref 10000
+(* URG_TODO: move this elsewhere! *)
+let _ = Random.self_init ()
+
+let localport = ref (10000 + (Random.int 10000))
 
 let getid t dest_ip dest_port =
   (* TODO: make this more robust and recognise when all ports are gone *)
@@ -547,7 +502,7 @@ let connect t ~dest_ip ~dest_port =
   let id = getid t dest_ip dest_port in
   let tx_isn = Sequence.of_int ((Random.int 65535) + 0xABCD0000) in
   (* TODO: This is hardcoded for now - make it configurable *)
-  let rx_wnd_scaleoffer = 2 in
+  let rx_wnd_scaleoffer = wscale_default in
   let options = Options.MSS 1460 :: Options.Window_size_shift rx_wnd_scaleoffer :: [] in
   let window = 5840 in
   let th, wakener = Lwt.task () in
@@ -571,22 +526,7 @@ let listen t port =
   Hashtbl.replace t.listeners port (st, pushfn);
   (st, {t; port})
 
-
-(* Construct the main TCP thread *)
-let create ip =
-  let thread, _ = Lwt.task () in
-  let listeners = Hashtbl.create 1 in
-  let listens = Hashtbl.create 1 in
-  let connects = Hashtbl.create 1 in
-  let channels = Hashtbl.create 7 in
-  let t = { ip; channels; listeners; listens; connects } in
-  Ipv4.attach ip (`TCP (input t));
-  Lwt.on_cancel thread (fun () ->
-    printf "TCP: shutting down\n%!";
-    Ipv4.detach ip `TCP;
-  );
-  (t, thread)
-
+(*
 let print_onestat ~src ~sp ~dst ~dp ~st sent rxed =
   printf "%s\t%s\t%s\t%s\t%10d\t%10d\t%s\n%!" src sp dst dp sent rxed st
 
@@ -626,3 +566,114 @@ let tcpstats t =
   Hashtbl.iter listens_stats t.listens;
   Hashtbl.iter connects_stats t.connects;
   Hashtbl.iter channels_stats t.channels
+
+
+let get_onestat ~src ~sp ~dst ~dp ~st sent rxed =
+  (sprintf "%s\t%s\t%s\t%s\t%10d\t%10d\t%s\n" src sp dst dp sent rxed st)
+
+let get_listeners_stats t port _ s =
+  let src = ipv4_addr_to_string (Ipv4.get_ip t.ip) in
+  let sp = string_of_int port in
+  let dst = "*\t" in
+  let dp = "*" in
+  let st = tcpstates_to_string Listen in
+  s ^ (get_onestat ~src ~sp ~dst ~dp ~st 0 0)
+
+let get_connects_stats id (_, tx_isn) s =
+  let src = ipv4_addr_to_string id.local_ip in
+  let sp = string_of_int id.local_port in
+  let dst = ipv4_addr_to_string id.dest_ip in
+  let dp = string_of_int id.dest_port in
+  let st = tcpstates_to_string (Syn_sent tx_isn) in
+  s ^ (get_onestat ~src ~sp ~dst ~dp ~st 0 0)
+
+let get_pcb_stat pcb =
+  let src = ipv4_addr_to_string pcb.id.local_ip in
+  let sp = string_of_int pcb.id.local_port in
+  let dst = ipv4_addr_to_string pcb.id.dest_ip in
+  let dp = string_of_int pcb.id.dest_port in
+  let st = tcpstates_to_string (state pcb.state) in
+  get_onestat ~src ~sp ~dst ~dp ~st (Window.tx_totalbytes pcb.wnd) (Window.rx_totalbytes pcb.wnd)
+
+let get_listens_stats _ (_, (_, (pcb, _))) s =
+  s ^ (get_pcb_stat pcb)
+
+let get_channels_stats _ (pcb, _) s =
+  s ^ (get_pcb_stat pcb)
+
+let get_tcpstats t =
+  let s = sprintf "GC Stats\nlive_words = %d\npcb: \tallocs=%d\tfrees=%d\tdiff=%d\nth: \tallocs=%d\tfrees=%d\tdiff=%d\n\n"
+      Gc.((stat()).live_words) !pcb_allocs !pcb_frees (!pcb_allocs - !pcb_frees) !th_allocs !th_frees (!th_allocs - !th_frees) in
+  let s = s ^ "\nSrc \t\tSrc_P \tDst \t\tDst_P \tSent_bytes \tRxed_bytes \tState \n" in
+  let s = Hashtbl.fold (get_listeners_stats t) t.listeners s in
+  let s = Hashtbl.fold get_listens_stats t.listens s in
+  let s =  Hashtbl.fold get_connects_stats t.connects s in
+  let s =  Hashtbl.fold get_channels_stats t.channels s in
+  s
+
+
+let httphdr =
+  "HTTP/1.1 200 OK\nContent-Type: text/html\n\n"
+let htmltitle = 
+  "<html>\n<head>\n<title>Stats</title>\n</head>\n<body>\n"^
+  "<h1>Stats</h1>\n"^
+  "<p><h2>Status of current run: </h2><xmp>\n"
+let htmlend = 
+  "\n</xmp> End of data.</p>\n</body>\n</html>"
+
+
+let write_stat ch s =
+  let rec w_one start len ch s =
+    if (String.length s - start) > len then begin
+      let subs = String.sub s start len in
+      let bs = Bitstring.bitstring_of_string subs in
+      write ch bs >>
+      w_one (start + len) len ch s
+    end else begin
+      let subs = String.sub s start (String.length s - start) in
+      let bs = Bitstring.bitstring_of_string subs in
+      write ch bs
+    end
+  in
+  w_one 0 1460 ch s
+
+let statsprint t (ch, _) =
+  Gc.compact ();
+  let s = get_tcpstats t in
+  let rec onetxn ch = 
+    match_lwt read ch with
+    | None -> close ch 
+    | Some _ ->
+	write_stat ch httphdr >>
+	write_stat ch htmltitle >>
+	write_stat ch s >>
+	write_stat ch htmlend >>
+	close ch 
+  in
+  onetxn ch
+
+
+let startTcpStatsServer t ~port =
+  let st, l = listen t port in
+  Lwt_stream.iter_s (fun f -> statsprint t f) st
+
+*)
+(* Construct the main TCP thread *)
+let create ip =
+  let thread, _ = Lwt.task () in
+  let listeners = Hashtbl.create 1 in
+  let listens = Hashtbl.create 1 in
+  let connects = Hashtbl.create 1 in
+  let channels = Hashtbl.create 7 in
+  let t = { ip; channels; listeners; listens; connects } in
+  Ipv4.attach ip (`TCP (input t));
+  Lwt.on_cancel thread (fun () ->
+    printf "TCP: shutting down\n%!";
+    Ipv4.detach ip `TCP;
+  );
+ (*
+  let statsport = 81 in
+  let _ = startTcpStatsServer t statsport in 
+  *)
+  (t, thread)
+

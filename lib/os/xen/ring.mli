@@ -14,20 +14,28 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
+(** Allocate contiguous I/O pages initialised to contain an empty ring,
+    that are shared with domain number {[domid]}.
+    @param domid domain id to share the I/O page with
+    @param order request 2 ** order contiguous pages
+    @return Grant table entries and shared pages
+  *)
+val allocate : domid:int -> order:int -> (Gnttab.r list * Io_page.t) Lwt.t
+
 (** Shared ring handling to communicate with other Xen domains *)
 
 (** Abstract type for a shared ring *)
 type sring
 
-(** Allocate contiguous I/O pages that are shared with domain number {[domid]},
-    with the maximum size of each request/response in {[idx_size]}.
-    @param domid domain id to share the I/O page with
-    @param order request 2 ** order contiguous pages
+(** Given a buffer [buf] comprising pre-allocated contiguous
+    I/O pages, return an [sring] where the maximum size of each
+    request/response is {[idx_size]}.
+    @param buf pre-allocated contiguous I/O pages
     @param idx_size maximum size of each slot, in bytes
     @param name Name of the shared ring, for pretty-printing
-    @return Grant table entry and shared ring value
+    @return shared ring value
   *)
-val init : domid:int -> order:int -> idx_size:int -> name:string -> (Gnttab.r list * sring) Lwt.t
+val of_buf : buf:Io_page.t -> idx_size:int -> name:string -> sring
 
 (** The front-end of the shared ring, which issues requests and reads
     responses from the remote domain. 
@@ -44,10 +52,10 @@ module Front : sig
   val init : sring:sring -> ('a,'b) t
 
   (** Retrieve the request/response slot at the specified index as
-    * a Bitstring.
+    * an Io_page.t.
     * @param idx Index to retrieve, should be less than nr_ents
     *)
-  val slot : ('a,'b) t -> int -> Bitstring.t
+  val slot : ('a,'b) t -> int -> Io_page.t
 
   (** Retrieve number of slots in the shared ring *)
   val nr_ents : ('a,'b) t -> int
@@ -68,7 +76,7 @@ module Front : sig
     * the responses and wake up any sleeping threads that were
     * waiting for that particular response.
     *)
-  val ack_responses : ('a,'b) t -> (Bitstring.t -> unit) -> unit
+  val ack_responses : ('a,'b) t -> (Io_page.t -> unit) -> unit
 
   (** Update the shared request producer *)
   val push_requests : ('a,'b) t -> unit
@@ -87,12 +95,18 @@ module Front : sig
       @param fn Function that writes to a request slot and returns the request id
       @return Thread which returns the response value to the input request
     *)
-  val push_request_and_wait : ('a,'b) t -> (Bitstring.t -> 'b) -> 'a Lwt.t
+  val push_request_and_wait : ('a,'b) t -> (Io_page.t -> 'b) -> 'a Lwt.t
 
   (** Poll the ring for responses, and wake up any threads that are
       sleeping (as a result of calling {[push_request_and_wait]}).
     *)
-  val poll : ('a,'b) t -> (Bitstring.t -> ('b * 'a)) -> unit
+  val poll : ('a,'b) t -> (Io_page.t -> ('b * 'a)) -> unit
+
+  (** Wait for free slot on the ring *)
+  val wait_for_free_slot : ('a,'b) t -> unit Lwt.t
+  
+  (** Push an asynchronous request to the slot and call [freefn] when a response comes in *)
+  val push_request_async : ('a,'b) t -> (Io_page.t -> 'b) -> (unit -> unit) -> unit Lwt.t 
 end
 
 module Back : sig
@@ -106,10 +120,10 @@ module Back : sig
   val init : sring:sring -> ('a,'b) t
 
   (** Retrieve the request/response slot at the specified index as
-    * a Bitstring.
+    * a Io_page.
     * @param idx Index to retrieve, should be less than nr_ents
     *)
-  val slot : ('a,'b) t -> int -> Bitstring.t
+  val slot : ('a,'b) t -> int -> Io_page.t
 
   (** Retrieve number of slots in the shared ring *)
   val nr_ents : ('a,'b) t -> int
@@ -126,6 +140,10 @@ module Back : sig
       @return true if an event channel notification is required
     *)
   val push_responses_and_check_notify : ('a,'b) t -> bool
+
+  (** Monitor the ring for requests, calling the given handler
+      function for each one. *)
+  val service_thread : ('a,'b) t -> int -> (Io_page.t -> unit) -> unit Lwt.t
 end
 
 module Console : sig

@@ -15,19 +15,13 @@ ifeq ($(OS) $(ARCH),linux x86_64)
 XEN_BUILD=xen
 endif
 
-ifeq ($(NODE),)
-NODE_BUILD=
-else
-NODE_BUILD=
-endif
-
 UNIX_BUILD= unix-direct unix-socket
 
-all: $(XEN_BUILD) $(NODE_BUILD) $(UNIX_BUILD)
+all: $(XEN_BUILD) $(UNIX_BUILD)
 	@ :
 
 doc:
-	for spec in $(XEN_BUILD) $(NODE_BUILD) $(UNIX_BUILD); do \
+	for spec in $(XEN_BUILD) $(UNIX_BUILD); do \
 	  SPEC=$$spec ocamlbuild $(OFLOAGS) $(JOBS) doc.otarget; \
 	done
 

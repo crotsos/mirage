@@ -18,21 +18,34 @@ open Lwt
 open Printf
 open Nettypes
 
+cstruct icmpv4 {
+  uint8_t ty;
+  uint8_t code;
+  uint16_t csum;
+  uint16_t id;
+  uint16_t seq
+} as big_endian
+
 type t = {
   ip: Ipv4.t;
 }
 
-let input t src pkt =
-  bitmatch pkt with
-  |{0:8; code:8; csum:16; id:16; seq:16; _:-1:bitstring} -> (* echo reply *)
+let input t src hdr buf =
+  match get_icmpv4_ty buf with
+  |0 -> (* echo reply *)
     return (printf "ICMP: discarding echo reply\n%!")
-  |{8:8; code:8; csum:16; id:16; seq:16; data:-1:bitstring} -> (* echo req *)
-    (* Adjust checksum for reply and transmit EchoReply *)
-    let csum = (csum + 0x0800) land 0xffff in
-    let reply = BITSTRING { 0:8; code:8; csum:16; id:16; seq:16 } in
-    Ipv4.output t.ip ~proto:`ICMP ~dest_ip:src [reply; data]
-  |{ty:8; code:8; csum:16; id:16; seq:16; data:-1:bitstring} -> (* unknown *)
-    printf "ICMP unknown ty %d code %d id %d\n%!" ty code id;
+  |8 -> (* echo request *)
+    let csum =
+      let orig_csum = get_icmpv4_csum buf in
+      let shift = if orig_csum > 0xffff -0x0800 then 0x0801 else 0x0800 in
+      (orig_csum + shift) land 0xffff in
+    lwt header = Ipv4.get_writebuf ~proto:`ICMP ~dest_ip:src t.ip in
+    set_icmpv4_ty buf 0;
+    set_icmpv4_csum buf csum;
+    let header = Cstruct.sub header 0 0 in
+    Ipv4.writev t.ip ~header [buf]
+  |ty ->
+    printf "ICMP unknown ty %d\n" ty; 
     return ()
 
 let create ip =

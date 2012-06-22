@@ -74,17 +74,17 @@ let plug t id vif =
   let (icmp, icmp_t) = Icmp.create ipv4 in
   let (tcp, tcp_t) = Tcp.Pcb.create ipv4 in
   let (udp, udp_t) = Udp.create ipv4 in
-  let i = { id; ipv4; tcp; udp; icmp; netif } in
+  let i = { id; ipv4; icmp; netif; tcp; udp } in
   (* The interface thread can be cancelled by exceptions from the
      rest of the threads, as a debug measure.
      TODO: think about restart strategies here *)
-  let th = join (List.map wrap ["udp",udp_t; "tcp",tcp_t; "ipv4",ipv4_t;
-    "netif", netif_t; "icmp", icmp_t]) in
+  let th,_ = Lwt.task () in
   (* Register the interface_t with the manager interface *)
   Hashtbl.add t.listeners id (i,th);
   printf "Manager: plug done, to listener\n%!";
   t.listener t i id
 
+(*
 let send_raw t intf_name frame =
   if (Hashtbl.mem t.listeners intf_name) then  
     let (intf, x) = (Hashtbl.find t.listeners intf_name) in 
@@ -123,6 +123,7 @@ let plug_xen_switch t id vif =
     plug t id vif
   else
     plug_raw t id vif 
+*)
 
 (* Unplug a network interface and cancel all its threads. *)
 let unplug t id =
@@ -140,29 +141,15 @@ let create listener =
   let listeners = Hashtbl.create 1 in
   let t = { listener; listeners } in
   let _ = OS.Netif.create (plug t) in
-  (*  let _ = OS.Netif.create (plug t) in *)
   let th,_ = Lwt.task () in
-    Lwt.on_cancel th (fun _ ->
-                        printf "Manager: cancel\n%!";
-                        Hashtbl.iter (fun id _ -> unplug t id) listeners);
-    printf "Manager: init done\n%!";
-    th
-
-(* Really ugly hack, kids don't ry this at home  *)
-let create_xen_switch listener =
-  printf "Manager: create\n%!";
-  let listeners = Hashtbl.create 1 in
-  let t = { listener; listeners } in
-  let _ = OS.Netif.create (plug_xen_switch t) in
-  (*  let _ = OS.Netif.create (plug t) in *)
-  let th,_ = Lwt.task () in
-    Lwt.on_cancel th (fun _ ->
-                        printf "Manager: cancel\n%!";
-                        Hashtbl.iter (fun id _ -> unplug t id) listeners);
-    printf "Manager: init done\n%!";
-    th
+  Lwt.on_cancel th (fun _ ->
+    printf "Manager: cancel\n%!";
+    Hashtbl.iter (fun id _ -> unplug t id) listeners);
+  printf "Manager: init done\n%!";
+  th
 
 
+(*
 (* This is a function that will create a set of interface which will allow
  the creation of net devices on which we are able to intercept packets 
  and push them to the controller. 
@@ -183,6 +170,7 @@ let create_raw listener =
 let intercept t fn = 
   Ethif.intercept t.netif fn
 
+*)
 (* Find the interfaces associated with the address *)
 let i_of_ip t addr =
   match addr with
@@ -202,7 +190,6 @@ let tcpv4_of_addr t addr =
 (* TODO: do actual route selection *)
 let udpv4_of_addr (t:t) addr =
   List.map (fun x -> x.udp) (i_of_ip t addr)
-
 let ipv4_of_interface (t:interface) = 
   t.ipv4
 

@@ -36,7 +36,7 @@ let rec hashtbl_remove_all tbl name =
 
 type contents = [
   | `String of string
-  | `Inchan of (int64 * Bitstring.t Lwt_stream.t) (* size * stream *)
+  | `Inchan of (int64 * OS.Io_page.t Lwt_stream.t) (* size * stream *)
 ]
 
 type message = {
@@ -109,13 +109,16 @@ let init ~body ~headers ~version =
   msg
 
 let serialize_to_channel msg ~fstLineToString chan =
-  let body = body msg in
+  let body = (body msg : contents list) in
   let bodylen = body_size body in
-  Net.Channel.write_string chan (fstLineToString ^ crlf) >>
-  Lwt_list.iter_s (fun (h,v) ->
-    Net.Channel.write_string chan (sprintf "%s: %s\r\n" h v)) (headers msg) >>
-  Net.Channel.write_string chan (sprintf "Content-Length: %Ld\r\n\r\n" bodylen) >>
-  Lwt_list.iter_s (function
-    |`String s -> Net.Channel.write_string chan s
-    |`Inchan (_,t) -> Lwt_stream.iter_s (Net.Channel.write_bitstring chan) t
-  ) body
+  Net.Channel.write_line chan fstLineToString;
+  List.iter (fun (h,v) ->
+    Net.Channel.write_line chan (sprintf "%s: %s" h v)
+  ) (headers msg);
+  let clen = sprintf "Content-Length: %Ld\r\n\r\n" bodylen in
+  Net.Channel.write_string chan clen 0 (String.length clen);
+  lwt () = Lwt_list.iter_s (function
+    |`String s -> return (Net.Channel.write_string chan s 0 (String.length s))
+    |`Inchan (_,t) -> Lwt_stream.iter_s (fun c -> return (Net.Channel.write_buffer chan c)) t
+  ) body in
+  Net.Channel.flush chan

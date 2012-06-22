@@ -29,16 +29,15 @@ module UDPv4 = struct
   type src = ipv4_addr option * int
   type dst = ipv4_addr * int
 
-  type msg = Bitstring.t
+  type msg = OS.Io_page.t
 
-  let rec send mgr ?src (dstaddr, dstport) req =
-    let (buf,off,len) = req in
+  let rec send mgr ?src (dstaddr, dstport) buf =
     lwt fd = match src with
       |None -> return (Manager.get_udpv4 mgr)
       |Some src -> Manager.get_udpv4_listener mgr src
     in
-    let off = off / 8 in
-    let len = len / 8 in
+    let off = Cstruct.base_offset buf in
+    let len = Cstruct.len buf in
     let dst = (ipv4_addr_to_uint32 dstaddr, dstport) in
     match R.udpv4_sendto fd buf off len dst with
     |R.OK len' ->
@@ -48,18 +47,18 @@ module UDPv4 = struct
         return ()
     |R.Retry -> 
       Activations.write fd >>
-      send mgr (dstaddr, dstport) req
+      send mgr (dstaddr, dstport) buf
     |R.Err err -> fail (Error err)
 
   let recv mgr (addr,port) fn =
     lwt lfd = Manager.get_udpv4_listener mgr (addr,port) in
-    let buf = String.create 4096 in
+    let buf = OS.Io_page.get () in
     let rec listen () =
-      match R.udpv4_recvfrom lfd buf 0 (String.length buf) with
+      match R.udpv4_recvfrom lfd buf 0 (Cstruct.len buf) with
       |R.OK (frm_addr, frm_port, len) ->
         let frm_addr = ipv4_addr_of_uint32 frm_addr in
         let dst = (frm_addr, frm_port) in
-        let req = (buf,0,(len * 8)) in
+        let req = Cstruct.sub buf 0 len in
         (* Be careful to catch an exception here, as otherwise
            ignore_result may raise it at some other random point *)
         Lwt.ignore_result (

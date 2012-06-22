@@ -17,41 +17,36 @@
 
 open Lwt 
 open Printf
+open Net
 
 let port = 55555
+let use_dhcp = false
+let ip = Net.Nettypes.(
+  (ipv4_addr_of_tuple (10l,0l,0l,2l),
+   ipv4_addr_of_tuple (255l,255l,255l,0l),
+   [ ipv4_addr_of_tuple (10l,0l,0l,1l) ]
+  ))
 
-let rec echo (dip,dpt) chan = 
+
+let rec echo dst chan = 
   Log.info "Channel_echo" "callback!";
-
-    (* doesn't seem to respect ^D closing the connection
   try_lwt
-    lwt buf = Channel.read_crlf chan in
-    Channel.write_bitstring chan buf
-    >> (Log.info "Echo" "buf:%s" (Bitstring.string_of_bitstring buf);
-        Channel.write_char chan '\n'
-    )
-    >> Channel.flush chan
-    >> echo dst chan
+    lwt bufs = Channel.read_line chan in
+    List.iter (Channel.write_buffer chan) bufs;
+    Log.info "Echo" "buf:%s" "";
+    Channel.write_char chan '\n';
+    lwt () = Channel.flush chan in
+    echo dst chan
   with Nettypes.Closed -> return (Log.info "Echo" "closed!")
-    *)
-
-  try_lwt
-    lwt more, buf = Net.Channel.read_until chan '\n' in
-    let s = Bitstring.string_of_bitstring buf in
-    
-    Net.Channel.write_string chan (sprintf "%s\n" s)
-    >> Net.Channel.flush chan
-    >> (Log.info "Channel_echo" "rem:%s:%d buf:%s"
-          (Net.Nettypes.ipv4_addr_to_string dip) dpt s;
-      if more then echo (dip,dpt) chan 
-      else
-        return(Log.info "Channel_echo" "closed!")
-    )
-  with Net.Nettypes.Closed -> return (Log.info "Echo" "closed!")
 
 let main () =
   Log.info "Echo" "starting server";
   Net.Manager.create (fun mgr interface id ->
-    Net.Channel.listen mgr (`TCPv4 ((None, port), echo))
-    >> return (Log.info "Channel_echo" "done!")
+    lwt () = (match use_dhcp with
+      | false -> Manager.configure interface (`IPv4 ip)
+      | true -> Manager.configure interface (`DHCP)
+    )
+    in
+    lwt () = Net.Channel.listen mgr (`TCPv4 ((None, port), echo)) in
+    return (Log.info "Channel_echo" "done!")
   )

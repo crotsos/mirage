@@ -37,8 +37,8 @@ external tcpv4_accept: [`tcpv4] fd -> ([`tcpv4] fd * ipv4 * port) resp = "caml_t
 
 external udpv4_socket: unit -> [`udpv4] fd = "caml_udpv4_socket"
 external udpv4_bind: ipv4 -> port -> [`udpv4] fd resp = "caml_udpv4_bind"
-external udpv4_recvfrom: [`udpv4] fd -> string -> int -> int -> (ipv4 * port * int) resp = "caml_udpv4_recvfrom"
-external udpv4_sendto: [`udpv4] fd -> string -> int -> int -> (ipv4 * port) -> int resp = "caml_udpv4_sendto"
+external udpv4_recvfrom: [`udpv4] fd -> Io_page.t -> int -> int -> (ipv4 * port * int) resp = "caml_udpv4_recvfrom"
+external udpv4_sendto: [`udpv4] fd -> Io_page.t -> int -> int -> (ipv4 * port) -> int resp = "caml_udpv4_sendto"
 
 external domain_uid: unit -> uid = "caml_domain_name"
 external domain_bind: uid -> [`domain] fd resp = "caml_domain_bind"
@@ -64,8 +64,8 @@ external opendir: string -> dir resp = "caml_opendir"
 external readdir: dir -> string resp = "caml_readdir"
 external closedir: dir -> unit resp = "caml_closedir"
 
-external read: [<`udpv4|`tcpv4|`rd_pipe|`ro_file|`rw_file|`tap] fd -> string -> int -> int -> int resp = "caml_socket_read"
-external write: [<`udpv4|`tcpv4|`wr_pipe|`tap|`rw_file] fd -> string -> int -> int -> int resp = "caml_socket_write"
+external read: [<`udpv4|`tcpv4|`rd_pipe|`ro_file|`rw_file|`tap] fd -> Io_page.t -> int -> int -> int resp = "caml_socket_read"
+external write: [<`udpv4|`tcpv4|`wr_pipe|`tap|`rw_file] fd -> Io_page.t -> int -> int -> int resp = "caml_socket_write"
 external close: [<`tcpv4|`udpv4|`domain|`rd_pipe|`wr_pipe|`ro_file|`rw_file|`tap] fd -> unit = "caml_socket_close"
 
 external opentap: string -> [`tap ] fd = "tap_opendev"
@@ -75,11 +75,10 @@ external fd_to_int : 'a fd -> int = "%identity"
 (** Given an activation function actfn (to know when the FD is ready),
     perform an iofn repeatedly until either error or value is obtained *)
 let rec fdbind actfn iofn fd =
-  actfn (fd_to_int fd) >>
   match iofn fd with
   |OK x -> return x
   |Err err -> fail (Error err)
-  |Retry -> fdbind actfn iofn fd
+  |Retry -> actfn (fd_to_int fd) >> fdbind actfn iofn fd
 
 (** Same as fdbind, except on functions that do not need an Activation (e.g. disk fds) *)
 let rec iobind iofn arg =

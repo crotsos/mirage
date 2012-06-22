@@ -62,13 +62,8 @@ let wait port =
    new threads *)
 let run () =
   for port = 0 to nr_events - 1 do
-    if ((evtchn_test_and_clear port) || (port = 4)) then begin
-(*
-      let _ =
-        if ( port = 4 ) then 
-          Printf.printf "2222222 %d event found %d\n%!" !event port
-      in
-*)
+    (* XXX workaround rare event wedge bug XXX *)
+    if true || evtchn_test_and_clear port then begin
       Lwt_sequence.iter_node_l (fun node ->
         let (u, event) = Lwt_sequence.get node in
         Lwt_sequence.remove node;

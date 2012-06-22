@@ -19,28 +19,42 @@ open Printf
 
 module RX = struct
 
-  let idx_size = 8 (* max of sizeof(request), sizeof(response) *)
+  module Proto_64 = struct
+    cstruct req {
+      uint16_t       id;
+      uint16_t       _padding;
+      uint32_t       gref
+    } as little_endian
+
+    let write ~id ~gref slot =
+      set_req_id slot id;
+      set_req_gref slot gref;
+      id
+
+    cstruct resp {
+      uint16_t       id;
+      uint16_t       offset;
+      uint16_t       flags;
+      uint16_t       status
+    } as little_endian
+
+    let read slot =
+      get_resp_id slot, (get_resp_offset slot, get_resp_flags slot, get_resp_status slot)
+
+    let total_size = max sizeof_req sizeof_resp
+    let _ = assert(total_size = 8)
+  end
 
   type response = int * int * int
 
   let create (id,domid) =
     let name = sprintf "Netif.RX.%s" id in
-    lwt rx_gnts, sring = Ring.init ~domid ~order:0 ~idx_size ~name in
+    lwt rx_gnts, buf = Ring.allocate ~domid ~order:0 in
+    let sring = Ring.of_buf ~buf ~idx_size:Proto_64.total_size ~name in
     (* XXX: single-page ring for now *)
     let rx_gnt = List.hd rx_gnts in
     let fring = Ring.Front.init ~sring in
     return (rx_gnt, fring)
-
-  let write_request ~id ~gref (bs,bsoff,_) =
-    let req,_,reqlen = BITSTRING { id:16:littleendian; 0:16; gref:32:littleendian } in
-    String.blit req 0 bs (bsoff/8) (reqlen/8);
-    id
-
-  let read_response bs =
-    bitmatch bs with
-    | { id:16:littleendian; offset:16:littleendian; flags:16:littleendian;
-        status:16:littleendian } ->
-          (id, (offset, flags, status))
 
 end
 
@@ -52,23 +66,46 @@ module TX = struct
 
   let create (id,domid) =
     let name = sprintf "Netif.TX.%s" id in
-    lwt tx_gnts, sring = Ring.init ~domid ~order:0 ~idx_size ~name in
+    lwt tx_gnts, buf = Ring.allocate ~domid ~order:0 in
+    let sring = Ring.of_buf ~buf ~idx_size ~name in
     (* XXX: single page ring for now *)
     let tx_gnt = List.hd tx_gnts in
     let fring = Ring.Front.init ~sring in
     return (tx_gnt, fring)
 
-  let write_request ~gref ~offset ~flags ~id ~size (bs,bsoff,_) =
-    let req,_,reqlen = BITSTRING { gref:32:littleendian; offset:16:littleendian;
-      flags:16:littleendian; id:16:littleendian; size:16:littleendian } in
-    String.blit req 0 bs (bsoff/8) (reqlen/8);
-    id
+  module Proto_64 = struct
+    cstruct req {
+      uint32_t       gref;
+      uint16_t       offset;
+      uint16_t       flags;
+      uint16_t       id;
+      uint16_t       size
+    } as little_endian
 
-  let read_response bs =
-    bitmatch bs with
-    | { id:16:littleendian; status:16:littleendian } ->
-        (id, status)
+    type flags =
+      |Checksum_blank (* 1 *)
+      |Data_validated (* 2 *)
+      |More_data      (* 4 *)
+      |Extra_info     (* 8 *)
 
+    let flag_more_data = 4
+
+    let write ~gref ~offset ~flags ~id ~size slot =
+      set_req_gref slot gref;
+      set_req_offset slot offset;
+      set_req_flags slot flags;
+      set_req_id slot id;
+      set_req_size slot size;
+      id
+
+    cstruct resp {
+      uint16_t       id;
+      uint16_t       status
+    } as little_endian
+
+    let read slot =
+      get_resp_id slot, get_resp_status slot
+  end
 end
 
 type features = {
@@ -164,62 +201,77 @@ let refill_requests nf =
       Hashtbl.add nf.rx_map id (gnt, page);
       let slot_id = Ring.Front.next_req_id nf.rx_fring in
       let slot = Ring.Front.slot nf.rx_fring slot_id in
-      ignore(RX.write_request ~id ~gref slot)
+      ignore(RX.Proto_64.write ~id ~gref slot)
     ) (List.combine gnts pages);
   if Ring.Front.push_requests_and_check_notify nf.rx_fring then
     Evtchn.notify nf.evtchn;
   return ()
 
 let rx_poll nf fn =
-  Ring.Front.ack_responses nf.rx_fring (fun bs ->
-    let id,(offset,flags,status) = RX.read_response bs in
+  Ring.Front.ack_responses nf.rx_fring (fun slot ->
+    let id,(offset,flags,status) = RX.Proto_64.read slot in
     let gnt, page = Hashtbl.find nf.rx_map id in
     Hashtbl.remove nf.rx_map id;
-    let bs = Io_page.to_bitstring page in
     Gnttab.end_access gnt;
     Gnttab.put gnt;
     match status with
     |sz when status > 0 ->
-      let packet = Bitstring.subbitstring bs 0 (sz*8) in
-      let copy = Bitstring.bitstring_of_string (Bitstring.string_of_bitstring packet) in
-      Io_page.put page;
-      ignore_result (try_lwt fn copy 
+      let packet = Io_page.sub page 0 sz in
+      ignore_result (try_lwt fn packet
         with exn -> return (printf "RX exn %s\n%!" (Printexc.to_string exn)))
     |err -> printf "RX error %d\n%!" err
   )
 
-(* Transmit a packet from buffer, with offset and length *)  
-let output nf bsv =
-  Io_page.with_page
-    (fun page ->
-      Gnttab.with_ref
-        (fun gnt ->
-          Gnttab.with_grant ~domid:nf.backend_id ~perm:Gnttab.RO gnt page
-            (fun () ->
-    let gref = Gnttab.to_int32 gnt in
-    let id = Int32.to_int gref in
-    let page = Io_page.to_bitstring page in
-    let (pagebuf, pageoffbits, _) = page in
-    let pageoff = pageoffbits / 8 in
-    let size = List.fold_left (fun offset (src,srcoff,srclenbits) ->
-      let srclen = srclenbits / 8 in
-      String.blit src (srcoff/8) pagebuf (pageoff+offset) srclen;
-      offset+srclen) 0 bsv in
-    let flags = 0 in
-    let offset = 0 in
-    let res = Ring.Front.push_request_and_wait nf.tx_fring
-      (TX.write_request ~id ~gref ~offset~flags ~size) in
-    if Ring.Front.push_requests_and_check_notify nf.tx_fring then
-      Evtchn.notify nf.evtchn;
-    match_lwt res with
-    |status when status = 0 -> return ()
-    |errcode -> return (printf "TX: error %d\n%!" errcode)
-  )
-))
-
-
 let tx_poll nf =
-  Ring.Front.poll nf.tx_fring (TX.read_response)
+  Ring.Front.poll nf.tx_fring TX.Proto_64.read
+
+(* Push a single page to the ring, but no event notification *)
+let write_request ?size ~flags nf page =
+  lwt gnt = Gnttab.get () in
+  (* This grants access to the *base* data pointer of the page *)
+  Gnttab.grant_access ~domid:nf.backend_id ~perm:Gnttab.RO gnt page;
+  let gref = Gnttab.to_int32 gnt in
+  let id = Int32.to_int gref in
+  let size = match size with |None -> Io_page.length page |Some s -> s in
+  let offset = Cstruct.base_offset page in
+  Ring.Front.push_request_async nf.tx_fring
+    (TX.Proto_64.write ~id ~gref ~offset ~flags ~size) 
+    (fun () ->
+      Gnttab.end_access gnt; 
+      Gnttab.put gnt)
+ 
+(* Transmit a packet from buffer, with offset and length *)  
+let write nf page =
+  lwt () = write_request ~flags:0 nf page in
+  if Ring.Front.push_requests_and_check_notify nf.tx_fring then
+    Evtchn.notify nf.evtchn;
+  return ()
+
+(* Transmit a packet from a list of pages *)
+let writev nf pages =
+  match pages with
+  |[] -> return ()
+  |[page] ->
+     (* If there is only one page, then just write it normally *)
+     write nf page
+  |first_page::other_pages ->
+     (* For Xen Netfront, the first fragment contains the entire packet
+      * length, which is the backend will use to consume the remaining
+      * fragments until the full length is satisfied *)
+     lwt () = write_request ~flags:TX.Proto_64.flag_more_data ~size:(Cstruct.lenv pages) nf first_page in
+     let rec xmit = 
+       function
+       |[] -> return ()
+       |[page] -> (* The last fragment has no More_data flag to indicate eof *)
+          write_request ~flags:0 nf page
+       |page::tl -> (* A middle fragment has a More_data flag set *)
+          lwt () = write_request ~flags:TX.Proto_64.flag_more_data nf page in
+          xmit tl
+     in
+     lwt () = xmit other_pages in
+     if Ring.Front.push_requests_and_check_notify nf.tx_fring then
+       Evtchn.notify nf.evtchn;
+     return ()
 
 let listen nf fn =
   (* Listen for the activation to poll the interface *)
@@ -271,4 +323,10 @@ let mac nf =
 
 (* The Xenstore MAC address is colon separated, very helpfully *)
 let ethid t = 
-  t.id
+  string_of_int t.backend_id
+
+(* Get write buffer for Netif output *)
+let get_writebuf t =
+  let page = Io_page.get () in
+  (* TODO: record statistics for requesting thread here (in debug mode?) *)
+  return page

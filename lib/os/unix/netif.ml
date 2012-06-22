@@ -26,7 +26,6 @@ type t = {
   mac: string;
 }
 
-
 exception Ethif_closed
 
 (* We must generate a fake MAC for the Unix "VM", as using the
@@ -76,8 +75,8 @@ let create fn =
 
 (* Input a frame, and block if nothing is available *)
 let rec input t =
+  let page = Io_page.get () in
   let sz = 4096 in
-  let page = String.create sz in
   lwt len = Socket.fdbind Activations.read (fun fd -> Socket.read fd page 0 sz) t.dev in
   match len with
   |(-1) -> (* EAGAIN or EWOULDBLOCK *)
@@ -86,7 +85,13 @@ let rec input t =
     t.active <- false;
     input t
   |n ->
-    return (page, 0, n lsl 3)
+    return page
+
+(* Get write buffer for Netif output *)
+let get_writebuf t =
+  let page = Io_page.get () in
+  (* TODO: record statistics for requesting thread here (in debug mode?) *)
+  return page
 
 (* Loop and listen for packets permanently *)
 let rec listen t fn =
@@ -97,7 +102,7 @@ let rec listen t fn =
       try_lwt 
         fn frame
       with exn ->
-        return (printf "EXN: %s\n%!" (Printexc.to_string exn))
+        return (printf "EXN: %s bt: %s\n%!" (Printexc.to_string exn) (Printexc.get_backtrace()))
     );
     listen t fn
   |false ->
@@ -108,17 +113,33 @@ let destroy nf =
   printf "tap_destroy\n%!";
   return ()
 
-(* Transmit a packet from a bitstring *)
-let output t bss =
-  let buf,off,len = Bitstring.concat bss in
-  let off = off/8 in
-  let len = len/8 in
-  lwt len' = Socket.fdbind Activations.write (fun fd -> Socket.write fd buf off len) t.dev in
+(* Transmit a packet from an Io_page *)
+let write t page =
+  let off = Cstruct.base_offset page in
+  let len = Cstruct.len page in
+  lwt len' = Socket.fdbind Activations.write (fun fd -> Socket.write fd page off len) t.dev in
   if len' <> len then
     raise_lwt (Failure (sprintf "tap: partial write (%d, expected %d)" len' len))
   else
     return ()
 
+
+(* TODO use writev: but do a copy for now *)
+let writev t pages =
+  match pages with
+  |[] -> return ()
+  |[page] -> write t page
+  |pages ->
+    let page = Io_page.get () in
+    let off = ref 0 in
+    List.iter (fun p ->
+      let len = Cstruct.len p in
+      Cstruct.blit_buffer p 0 page !off len;
+      off := !off + len;
+    ) pages;
+    let v = Cstruct.sub page 0 !off in
+    write t v
+  
 let ethid t = 
   t.id
 

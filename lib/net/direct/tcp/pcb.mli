@@ -21,7 +21,7 @@ type pcb
 type listener
 type connection = (pcb * unit Lwt.t) 
 
-val input: t -> src:ipv4_addr -> dst:ipv4_addr -> Bitstring.t -> unit Lwt.t
+val input: t -> src:ipv4_addr -> dst:ipv4_addr -> OS.Io_page.t -> unit Lwt.t
 
 val connect: t -> dest_ip:ipv4_addr -> dest_port:int -> connection option Lwt.t
 
@@ -33,16 +33,14 @@ val close: pcb -> unit Lwt.t
 val get_dest: pcb -> (ipv4_addr * int)
 
 (* Blocking read for a segment *)
-val read: pcb -> Bitstring.t option Lwt.t
+val read: pcb -> OS.Io_page.t option Lwt.t
 
-(* Low-level write interface that lets the application
-   decide on a write strategy *)
-val write_available: pcb -> int
-val write_wait_for: pcb -> int -> unit Lwt.t
 (* Write a segment *)
-val write: pcb -> Bitstring.t -> unit Lwt.t
-(* Write a segment without using Nagle's algorithm*)
-val write_nodelay: pcb -> Bitstring.t -> unit Lwt.t
+val write_available : pcb -> int
+val write_wait_for : pcb -> int -> unit Lwt.t
+
+val write: pcb -> OS.Io_page.t -> unit Lwt.t
+val writev: pcb -> OS.Io_page.t list -> unit Lwt.t
 
 val create: Ipv4.t -> t * unit Lwt.t
-val tcpstats: t -> unit
+(* val tcpstats: t -> unit *)

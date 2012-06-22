@@ -31,25 +31,16 @@ module TCPv4 = struct
     Tcp.Pcb.read t
 
   let rec write t view =
-    let vlen = Bitstring.bitstring_length view / 8 in
+    let vlen = Cstruct.len view in
     match Tcp.Pcb.write_available t with
-    |0 -> (* block for window to open *)
-      Tcp.Pcb.write_wait_for t 1 >>
+    |len when len < vlen -> (* block for window to open *)
+      Tcp.Pcb.write_wait_for t vlen >>
       write t view
-    |len when len < vlen -> (* do a short write *)
-      let v' = Bitstring.subbitstring view 0 (len * 8) in
-      Tcp.Pcb.write t v' >>
-      write t (Bitstring.subbitstring view (len*8) ((vlen-len)*8))
     |len -> (* full write *)
       Tcp.Pcb.write t view
 
-  (* For now this is the slow "just concat bitstrings"
-     but it should be rewritten to block intelligently based
-     on the available write space XXX TODO *)
   let writev t views =
-    let view = Bitstring.concat views in
-    write t view >>
-    return Bitstring.empty_bitstring
+    Tcp.Pcb.writev t views
 
   let close t =
     Tcp.Pcb.close t
@@ -65,7 +56,7 @@ module TCPv4 = struct
 	  return ()
       end
       | Some (fl, th) -> begin
-        let _ = fn (Tcp.Pcb.get_dest fl) fl <?> th in
+        let _ = fn (Tcp.Pcb.get_dest fl) fl  in
         accept (st, l) 
       end
     in

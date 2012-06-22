@@ -31,7 +31,7 @@ module Rx = struct
      TODO: this will change when IP fragments work *)
   type seg = {
     sequence: Sequence.t;
-    data: Bitstring.t;
+    data: OS.Io_page.t;
     fin: bool;
     syn: bool;
     ack: bool;
@@ -48,7 +48,7 @@ module Rx = struct
     { sequence; fin; syn; ack; ack_number; window; data }
 
   let len seg = 
-    (Bitstring.bitstring_length seg.data / 8) +
+    (Cstruct.len seg.data) +
     (if seg.fin then 1 else 0) +
     (if seg.syn then 1 else 0)
 
@@ -62,7 +62,7 @@ module Rx = struct
 
   type q = {
     mutable segs: S.t;
-    rx_data: (Bitstring.t list option * int option) Lwt_mvar.t; (* User receive channel *)
+    rx_data: (OS.Io_page.t list option * int option) Lwt_mvar.t; (* User receive channel *)
     tx_ack: (Sequence.t * int) Lwt_mvar.t; (* Acks of our transmitted segs *)
     wnd: Window.t;
     state: State.t;
@@ -144,7 +144,7 @@ module Rx = struct
       let urx_inform =
         (* TODO: deal with overlapping fragments *)
         let elems_r, winadv = S.fold (fun seg (acc_l, acc_w) ->
-          (if Bitstring.bitstring_length seg.data > 0 then seg.data :: acc_l else acc_l), ((len seg) + acc_w)
+          (if Cstruct.len seg.data > 0 then seg.data :: acc_l else acc_l), ((len seg) + acc_w)
          )ready ([], 0) in
         let elems = List.rev elems_r in
 
@@ -176,10 +176,10 @@ module Tx = struct
    |Psh
 
   type xmit = flags:flags -> wnd:Window.t -> options:Options.ts ->
-              seq:Sequence.t -> Bitstring.t -> Bitstring.t list Lwt.t
+              seq:Sequence.t -> OS.Io_page.t list -> unit Lwt.t
 
   type seg = {
-    data: Bitstring.t;
+    data: OS.Io_page.t list;
     flags: flags;
     seq: Sequence.t;
   }
@@ -187,12 +187,12 @@ module Tx = struct
   (* Sequence length of the segment *)
   let len seg =
     (match seg.flags with |No_flags |Psh |Rst -> 0 |Syn |Fin -> 1) +
-    (Bitstring.bitstring_length seg.data / 8)
+    (Cstruct.lenv seg.data)
 
   (* Queue of pre-transmission segments *)
   type q = {
-    segs: seg Lwt_sequence.t;          (* Retransmitted segment queue *)
-    xmit: xmit;                        (* Transmit packet to the wire *)
+    segs: seg Lwt_sequence.t;      (* Retransmitted segment queue *)
+    xmit: xmit;                    (* Transmit packet to the wire *)
     rx_ack: Sequence.t Lwt_mvar.t; (* RX Ack thread that we've sent one *)
     wnd: Window.t;                 (* TCP Window information *)
     state: State.t;
@@ -211,6 +211,7 @@ module Tx = struct
        ACKed *)
     ()
 
+  (* URG_TODO: Add sequence number to the Syn_rcvd rexmit to only rexmit most recent *)
   let ontimer xmit st segs wnd seq =
     match state st with
     | Syn_rcvd _ | Established | Fin_wait_1 _ | Close_wait | Last_ack _ -> begin
@@ -303,8 +304,7 @@ module Tx = struct
     in
     tx_ack_t ()
 
-
-  let q ~xmit ~wnd ~state ~rx_ack ~tx_ack ~tx_wnd_update =
+  let q ~(xmit:xmit) ~wnd ~state ~rx_ack ~tx_ack ~tx_wnd_update =
     let segs = Lwt_sequence.create () in
     let dup_acks = 0 in
     let expire = ontimer xmit state segs wnd in

@@ -1,3 +1,5 @@
 str.cmxs
 pa_mirage.cmxs
 pa_mirage.cma
+pa_trace.cmxs
+pa_trace.cma

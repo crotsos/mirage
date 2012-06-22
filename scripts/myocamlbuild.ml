@@ -27,6 +27,7 @@ let home = getenv ~default:"/usr/bin" "HOME"
 let lib = getenv ~default:(home / "mir-inst") "MIRAGELIB"
 let cc = getenv ~default:"cc" "CC"
 let ld = getenv ~default:"ld" "LD"
+let profiling = false
 
 let profiling = false (* true *)
 
@@ -91,13 +92,18 @@ module Mir = struct
     let unixrun mode = lib / mode / "lib" / "libunixrun.a" in
     let unixmain mode = lib / mode / "lib" / "main.o" in
     let mode = sprintf "unix-%s" (env "%(mode)") in
-    let asmlib = match bc with |true -> A"-lcamlrun" |false -> A"-lasmrun" in
+    let asmlib = match bc,profiling with
+      |true,_ -> A"-lcamlrun" 
+      |false,true -> A"-lasmrunp"
+      |false,false -> A"-lasmrun"
+    in
     let dl_libs = match host with
-      |Linux -> [A"-lm"; asmlib; A"-lcamlstr"; A"-ldl"; A"-ltermcap"]
-      |Darwin |FreeBSD -> [A"-lm"; asmlib; A"-lcamlstr"] in
+      |Linux -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ldl"; A"-ltermcap"]
+      |Darwin |FreeBSD -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ltermcap"] in
     let tags = tags++"cc"++"c" in
-    Cmd (S (A cc :: [ T(tags++"link"); (* A"-pg"; *) A ocamlc_libdir; A"-o"; Px out; 
-             A (unixmain mode); P arg; A (unixrun mode); ] @ dl_libs))
+    let prof = if profiling then [A"-pg"] else [] in
+    Cmd (S (A cc :: [ T(tags++"link"); A ocamlc_libdir; A"-o"; Px out; 
+             A (unixmain mode); P arg; A (unixrun mode); ] @ prof @ dl_libs ))
 
   let cc_unix_bytecode_link = cc_unix_link true
   let cc_unix_native_link = cc_unix_link false
@@ -483,7 +489,8 @@ let _ = dispatch begin function
     flag ["ocaml"; "compile"] & std_flags;
     flag ["ocaml"; "pack"] & std_flags;
     flag ["ocaml"; "link"] & std_flags;
-    flag ["ocaml"; "native"; "compile"] & S [ (* A"-p" *)];
+    if profiling then flag ["ocaml"; "compile"; "native" ] & S [A"-p"; A"-g"];
+
     (* Include the correct stdlib depending on which backend is chosen *)
     List.iter (fun be ->
       let be = Spec.backend_to_string be in
@@ -493,11 +500,7 @@ let _ = dispatch begin function
       flag ["ocaml"; "link"; betag] & S [A"-I"; Px (lib / be / "lib")];
     ) Spec.all_backends;
     Mir.rules ();
-    Spec.rules ();
-    (* Link with dummy libnode when needed *)
-    let node_cclib = [ A"-dllpath"; Px (lib/"node"/"lib"); A"-dllib";
-      A"-los"; A"-cclib"; A"-los" ] in
-    flag ["ocaml"; "byte"; "program"; "backend:node"] & S node_cclib;
+    Spec.rules ()
 
   end
   | _ -> ()

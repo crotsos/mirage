@@ -1,8 +1,9 @@
+Sched
 Io_page
 Gnttab
+Activations
 Ring
 Evtchn
-Activations
 Console
 Clock
 Time

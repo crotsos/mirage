@@ -27,16 +27,15 @@ let ip = Net.Nettypes.(
    [ ipv4_addr_of_tuple (10l,0l,0l,1l) ]
   ))
 
-let rec echo (rip,rpt) pcb = 
+let rec echo pcb th =
   let open Net in
   match_lwt Tcp.Pcb.read pcb with
    | None -> Tcp.Pcb.close pcb
-   | Some bits -> begin
-       let s = Bitstring.string_of_bitstring bits in
-       let len = Bitstring.bitstring_length bits in
-       Tcp.Pcb.write_wait_for pcb len
-       >> Tcp.Pcb.write pcb bits
-       >> echo (rip,rpt) pcb
+   | Some v -> begin
+       let len = Cstruct.len v in
+       Tcp.Pcb.write_wait_for pcb len >> 
+       Tcp.Pcb.write pcb v >>
+       echo pcb th
    end
 
 let main () =
@@ -50,7 +49,7 @@ let main () =
     let ipv4 = Manager.ipv4_of_interface interface in
     let _, icmp_th = Icmp.create ipv4 in
     let tcp, tcp_th = Tcp.Pcb.create ipv4 in
-    Tcp.Pcb.listen tcp port echo
-    >> (icmp_th <?> tcp_th)
+    let conn_stream, listener = Tcp.Pcb.listen tcp port in
+    Lwt_stream.iter_s (fun (conn,th) -> echo conn th) conn_stream
   ))
   >> return (Log.info "Tcp_echo" "success")
