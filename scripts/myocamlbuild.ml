@@ -210,6 +210,7 @@ module Spec = struct
    |Node
    |Unix_direct
    |Unix_socket
+   |Ns3_direct
    |External
 
   (** Spec file describing the test and dependencies *)
@@ -224,6 +225,7 @@ module Spec = struct
   let backend_of_string = function
     |"xen" -> Xen 
     |"unix-direct" -> Unix_direct
+    |"ns3-direct" -> Ns3_direct
     |"node" -> Node 
     |"unix-socket" -> Unix_socket
     |"external" -> External
@@ -234,11 +236,12 @@ module Spec = struct
     |Node -> "node"
     |Unix_direct -> "unix-direct"
     |Unix_socket -> "unix-socket"
+    |Ns3_direct -> "ns3_direct"
     |External -> "external"
 
   (* List of all backends (not all need to be supported) *)
   let all_backends =
-    [ Xen; Node; Unix_direct; Unix_socket ]
+    [ Xen; Node; Unix_direct; Unix_socket; Ns3_direct ]
 
   (* Check if a backend is supported on this host *)
   let is_supported =
@@ -247,6 +250,7 @@ module Spec = struct
     |Xen -> if (host,arch) = (Linux,X86_64) && Sys.file_exists "/proc/xen/capabilities" then `Yes else `No
     |Node -> if js_of_ocaml_installed then `Yes else `No
     |Unix_direct |Unix_socket -> `Yes
+    |Ns3_direct -> `Yes
     |External -> `External
 
   let backends_iter fn spec = List.iter fn spec.backends
@@ -262,7 +266,7 @@ module Spec = struct
     match be with
     |Xen -> sprintf "%s/%s.xen" dir name 
     |Node -> sprintf "%s/%s.js" dir name
-    |Unix_direct |Unix_socket -> sprintf "%s/%s.bin" dir name
+    |Unix_direct |Unix_socket |Ns3_direct -> sprintf "%s/%s.bin" dir name
     |External -> assert false
 
   (** Spec file contains key:value pairs: 
