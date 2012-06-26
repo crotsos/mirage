@@ -16,8 +16,9 @@ XEN_BUILD=xen
 endif
 
 UNIX_BUILD= unix-direct unix-socket
+NS3_BUILD=ns3-direct
 
-all: $(XEN_BUILD) $(UNIX_BUILD)
+all: $(XEN_BUILD) $(UNIX_BUILD) $(NS3_BUILD)
 	@ :
 
 doc:
@@ -37,6 +38,9 @@ xen:
 	@mkdir -p _build
 	@env SPEC=xen ocamlbuild $(OFLAGS) $(JOBS) xen.otarget
 
+ns3-direct:
+	@mkdir -p _build
+	@env SPEC=ns3-direct ocamlbuild $(OFLAGS) $(JOBS) ns3.otarget
 node:
 	@mkdir -p _build
 	@env SPEC=node ocamlbuild $(OFLAGS) $(JOBS) node.otarget

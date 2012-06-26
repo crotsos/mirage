@@ -44,6 +44,7 @@ module Spec = struct
   
   let () = add "unix-direct" { os="unix"; net="direct"; block="direct"; syntax="" }
   let () = add "unix-socket" { os="unix"; net="socket"; block="socket"; syntax="" }
+  let () = add "ns3-direct" { os="ns3"; net="direct"; block="direct"; syntax="" }
   let () = add "xen" { os="xen"; net="direct"; block="direct"; syntax="" }
   let () = add "node" { os="node"; net="node"; block="node"; syntax="pa_js.cma" }
 
@@ -66,6 +67,7 @@ module Spec = struct
   (* The modules to copy into std/ are specified as (<dest file in std/> * "<subdirectory>/<file>") *)
   let modules =
     let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "openflow"; "oUnit"; "fs" ] in
+    let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "oUnit"; "fs" ] in
     let libs = List.map (fun lib -> lib, (ps "%s/%s" lib lib)) baselibs in
     os :: net :: block :: libs
 

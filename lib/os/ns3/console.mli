@@ -1,4 +1,4 @@
-/*
+(*
  * Copyright (c) 2010 Anil Madhavapeddy <anil@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -12,19 +12,25 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+ *)
 
-#include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
+(** Text console input/output operations. *)
 
-int
-main(int argc, char **argv)
-{
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
-}
+(** Abstract type of a console instance *)
+type t
+
+(** The default console, attached from the start of the program *)
+val t : t
+
+(** Create an additional console. Not implemented yet. *)
+val create : unit -> t
+
+(** Write a string with offset/length to the console *)
+val write : t -> string -> int -> int -> unit
+
+(** Same as {!OS.Console.write} except that the operation is synchronous *)
+val sync_write : t -> string -> int -> int -> unit Lwt.t
+
+val log : string -> unit
+
+val log_s : string -> unit Lwt.t

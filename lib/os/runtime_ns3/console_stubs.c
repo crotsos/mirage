@@ -15,16 +15,27 @@
  */
 
 #include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
+#include <string.h>
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
 
-int
-main(int argc, char **argv)
+/* Dont bother with full console, just direct everything to
+   stderr, so console_create is a noop for now */
+
+CAMLprim value
+console_create(value v_unit)
 {
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
+    return Val_int(0);
+}
+
+CAMLprim value
+console_write(value v_cons, value v_buf, value v_off, value v_len)
+{
+    int len = Int_val(v_len);
+    char buf[len+1];
+    memcpy(buf, String_val(v_buf)+Int_val(v_off), Int_val(v_len));
+    buf[len] = '\0';
+    fprintf(stderr, "%s", buf);
+    fflush(stderr);
+    return Val_unit;
 }

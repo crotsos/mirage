@@ -108,6 +108,29 @@ module Mir = struct
   let cc_unix_bytecode_link = cc_unix_link true
   let cc_unix_native_link = cc_unix_link false
 
+  (** Link to an ns3 executable binary *)
+  let cc_ns3_link bc tags arg out env =
+    let ocamlc_libdir = "-L" ^ (Lazy.force stdlib_dir) in
+    let open OS in
+    let ns3run mode = lib / mode / "lib" / "libns3run.a" in
+    let ns3main mode = lib / mode / "lib" / "main.o" in
+    let mode = sprintf "ns3-%s" (env "%(mode)") in
+    let asmlib = match bc,profiling with
+      |true,_ -> A"-lcamlrun" 
+      |false,true -> A"-lasmrunp"
+      |false,false -> A"-lasmrun"
+    in
+    let dl_libs = match host with
+      |Linux -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ldl"; A"-ltermcap"]
+      |Darwin |FreeBSD -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ltermcap"] in
+    let tags = tags++"cc"++"c" in
+    let prof = if profiling then [A"-pg"] else [] in
+    Cmd (S (A cc :: [ T(tags++"link"); A ocamlc_libdir; A"-o"; Px out; 
+             A (ns3main mode); P arg; A (ns3run mode); ] @ prof @ dl_libs ))
+
+  let cc_ns3_bytecode_link = cc_ns3_link true
+  let cc_ns3_native_link = cc_ns3_link false
+
   (** Link to a standalone Xen microkernel *)
   let cc_xen_link bc tags arg out env =
     let xenlib = lib / "xen" / "lib" in   
@@ -244,6 +267,24 @@ module Mir = struct
       ~dep:"unix-%(mode)/%(file)__.mb.o"
       (cc_link_c_implem cc_unix_bytecode_link "unix-%(mode)/%(file)__.mb.o" "unix-%(mode)/%(file).bcbin");
 
+    (* ns3 link rule *)
+    rule ("final link: %__.m.o -> %.ns3-%(mode).bin")
+      ~prod:"ns3-%(mode)/%(file).bin"
+      ~dep:"ns3-%(mode)/%(file)__.m.o"
+      (cc_link_c_implem cc_ns3_native_link "ns3-%(mode)/%(file)__.m.o" "ns3-%(mode)/%(file).bin");
+
+    (* ns3 bytecode link rule with ocamlclean *)
+    rule ("final link: %__.mc.c -> %.ns3-%(mode).bcxbin")
+      ~prod:"ns3-%(mode)/%(file).bcxbin"
+      ~dep:"ns3-%(mode)/%(file)__.mc.o"
+      (cc_link_c_implem cc_ns3_bytecode_link "ns3-%(mode)/%(file)__.mc.o" "ns3-%(mode)/%(file).bcxbin");
+
+    (* ns3 bytecode link rule without ocamlclean *)
+    rule ("final link: %__.mb.c -> %.ns3-%(mode).bcbin")
+      ~prod:"ns3-%(mode)/%(file).bcbin"
+      ~dep:"ns3-%(mode)/%(file)__.mb.o"
+      (cc_link_c_implem cc_ns3_bytecode_link "ns3-%(mode)/%(file)__.mb.o" "ns3-%(mode)/%(file).bcbin");
+
     (* Node link rule *)
     rule ("final link: node/%__.byte -> node/%.js")
       ~prod:"node/%.js"
@@ -268,6 +309,7 @@ module Spec = struct
    |Node
    |Unix_direct
    |Unix_socket
+   |Ns3_direct
    |External
 
   (** Spec file describing the test and dependencies *)
@@ -282,6 +324,7 @@ module Spec = struct
   let backend_of_string = function
     |"xen" -> Xen 
     |"unix-direct" -> Unix_direct
+    |"ns3-direct" -> Ns3_direct
     |"node" -> Node 
     |"unix-socket" -> Unix_socket
     |"external" -> External
@@ -292,11 +335,12 @@ module Spec = struct
     |Node -> "node"
     |Unix_direct -> "unix-direct"
     |Unix_socket -> "unix-socket"
+    |Ns3_direct -> "ns3-direct"
     |External -> "external"
 
   (* List of all backends (not all need to be supported) *)
   let all_backends =
-    [ Xen; Node; Unix_direct; Unix_socket ]
+    [ Xen; Node; Unix_direct; Unix_socket; Ns3_direct ]
 
   (* Check if a backend is supported on this host *)
   let is_supported =
@@ -305,6 +349,7 @@ module Spec = struct
     |Xen -> if (host,arch) = (Linux,X86_64) && Sys.file_exists "/proc/xen/capabilities" then `Yes else `No
     |Node -> if js_of_ocaml_installed then `Yes else `No
     |Unix_direct |Unix_socket -> `Yes
+    |Ns3_direct -> `Yes
     |External -> `External
 
   let backends_iter fn spec = List.iter fn spec.backends
@@ -320,7 +365,7 @@ module Spec = struct
     match be with
     |Xen -> sprintf "%s/%s.xen" dir name 
     |Node -> sprintf "%s/%s.js" dir name
-    |Unix_direct |Unix_socket -> sprintf "%s/%s.bin" dir name
+    |Unix_direct |Unix_socket |Ns3_direct -> sprintf "%s/%s.bin" dir name
     |External -> assert false
 
   (** Spec file contains key:value pairs: 

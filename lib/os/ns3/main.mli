@@ -1,4 +1,4 @@
-/*
+(*
  * Copyright (c) 2010 Anil Madhavapeddy <anil@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -12,19 +12,7 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+ *)
 
-#include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
-
-int
-main(int argc, char **argv)
-{
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
-}
+val run : unit Lwt.t -> unit
+val at_enter : (unit -> unit Lwt.t) -> unit

@@ -1,4 +1,4 @@
-/*
+(*
  * Copyright (c) 2010 Anil Madhavapeddy <anil@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -12,19 +12,31 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+ *)
 
-#include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
-
-int
-main(int argc, char **argv)
-{
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
+type tm = {
+  tm_sec : int;
+  tm_min : int;
+  tm_hour : int;
+  tm_mday : int;
+  tm_mon : int;
+  tm_year : int;
+  tm_wday : int;
+  tm_yday : int;
+  tm_isdst : bool;
 }
+
+external time : unit -> float = "unix_gettimeofday"
+external gmtime : float -> tm = "unix_gmtime"
+
+let () =
+  Log.set_date (fun () ->
+    let tm = gmtime (time ()) in
+    Printf.sprintf "%.4d/%.2d/%.2dT%.2d:%.2d:%.2dZ"
+      (1900+tm.tm_year)
+      tm.tm_mon
+      tm.tm_mday
+      tm.tm_hour
+      tm.tm_min
+      tm.tm_sec)
+    

@@ -6,6 +6,7 @@
 # xen:           direct microkernel
 # unix_direct:   UNIX tun/tap with ML net stack
 # unix_socket:   UNIX with kernel sockets and no access to lower layers
+# ns3_direct:   UNIX tun/tap with ML net stack
 # node:          node.js backend
 #
 # These all end up with a set of packed OCaml modules in one directory
@@ -31,6 +32,21 @@ function assemble_xen {
   else
     echo Skipping: Xen
   fi
+}
+
+function assemble_ns3 {
+  mode=$1
+  echo Assembling: ns3 $1
+  OBJ=${BUILDDIR}/ns3-$1
+  if [ ! -d ${ROOT}/lib/_build/ns3-$1 ]; then
+    echo Must build unix-$1 first
+    exit 1
+  fi
+  mkdir -p ${OBJ}/lib 
+  for i in libns3run.a main.o; do
+    cp ${ROOT}/lib/_build/ns3-$1/os/runtime_ns3/$i ${OBJ}/lib/
+  done
+  cp ${ROOT}/lib/_build/ns3-$1/std/*.{cmi,cmx,cmxa,a,o,cmo} ${OBJ}/lib/
 }
 
 function assemble_unix {
@@ -94,5 +110,6 @@ assemble_syntax
 assemble_xen
 assemble_unix "direct"
 assemble_unix "socket"
+assemble_ns3 "direct"
 assemble_scripts
 assemble_bin

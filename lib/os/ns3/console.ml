@@ -1,4 +1,4 @@
-/*
+(*
  * Copyright (c) 2010 Anil Madhavapeddy <anil@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -12,19 +12,29 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+ *)
 
-#include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
+open Lwt
 
-int
-main(int argc, char **argv)
-{
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
-}
+type t
+
+external write: t -> string -> int -> int -> unit = "console_write"
+external create: unit -> t = "console_create"
+
+let sync_write t buf off len =
+  write t buf off len;
+  return ()
+
+let create_additional_console () =
+  return (create ())
+
+let t =
+  create ()
+
+let log s =
+  write t s 0 (String.length s);
+  write t "\n" 0 1
+
+let log_s s =
+  let s = s ^ "\n" in
+  sync_write t s 0 (String.length s)

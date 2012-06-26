@@ -1,5 +1,5 @@
-/*
- * Copyright (c) 2010 Anil Madhavapeddy <anil@recoil.org>
+(*
+ * Copyright (c) 2011 Anil Madhavapeddy <anil@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -12,19 +12,19 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+ *)
 
-#include <stdio.h>
-#include <signal.h>
-#include <caml/callback.h>
-//#include "ev.h"
+(** Activations provides an interface to wait for a file descriptor
+    to become available for either reading or writing *)
 
-int
-main(int argc, char **argv)
-{
-  signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Main: startup\n");
-  caml_startup(argv);
-  fprintf(stderr, "Main: end\n");
-  return 0;
-}
+(** Wait for the file descriptor to become ready for reading 
+    @param fd file descriptor 
+    @return a thread that blocks until the [fd] is ready for reading *)
+val read: 'a Socket.fd -> unit Lwt.t
+
+(** Wait for the file descriptor to become ready for writing 
+    @param fd file descriptor 
+    @return a thread that blocks until the [fd] is ready for writing *)
+val write: 'a Socket.fd -> unit Lwt.t
+
+val wait : float -> unit
