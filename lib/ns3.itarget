@@ -1,4 +1,5 @@
 std/stdlib.cmxa
 os/runtime_ns3/libns3run.a
 os/runtime_ns3/main.o
+os/runtime_ns3/ns_stubs.o
 annots

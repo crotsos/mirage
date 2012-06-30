@@ -1,1 +1,3 @@
-<*.c>: pic,unix_header,include_system_ocaml
+<*.cc>: pic,unix_header,include_system_ocaml,include_ns3,use_asmrun
+<*.c>: pic,unix_header,include_system_ocaml,include_ns3
+"libns3run.a":use_asmrun

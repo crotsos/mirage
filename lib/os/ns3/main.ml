@@ -23,6 +23,8 @@
 
 open Lwt
 
+external ns3_run : unit -> int = "ocaml_ns3_run" 
+
 let exit_hooks = Lwt_sequence.create ()
 let enter_hooks = Lwt_sequence.create ()
 
@@ -48,29 +50,8 @@ open Printf
    once and once only. *)
 let run t =
   Printexc.record_backtrace true;
-  let t = call_hooks enter_hooks <&> t in
-  let rec fn () =
-    Gc.compact ();
-    (* Wake up any paused threads, and restart threads waiting on timeout *)
-    Lwt.wakeup_paused ();
-    Time.restart_threads Clock.time;
-    (* Attempt to advance the main loop thread *)
-    match Lwt.poll t with
-    | Some x ->
-       (* The main thread has completed, so return the value *)
-       x
-    | None -> 
-       (* If we have nothing to do, then check for the next
-          timeout and block the domain *)
-       let timeout =
-         match Time.select_next Clock.time with
-         |None -> 86400.0
-         |Some tm -> tm
-       in
-       Activations.wait timeout;
-       fn ()
-  in
-  fn ()
+  let _ = ns3_run () in
+  ()
 
 let () = at_exit (fun () -> run (call_hooks exit_hooks))
 let at_exit f = ignore (Lwt_sequence.add_l f exit_hooks)

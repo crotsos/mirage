@@ -169,6 +169,9 @@ module CC = struct
     A (ps "-I%s/os/runtime_xen/dietlibc" Pathname.pwd)
   ]
 
+  (* use ns3 header files *)
+  let ns3_incs = [A "-I/usr/local/include/ns3-dev";]
+
   let cc_cflags = List.map (fun x -> A x) !cflags
 
   let cc_c tags arg out =
@@ -201,6 +204,11 @@ module CC = struct
       ~tags:["cc"; "c"]
       ~prod:"%.o" ~dep:"%.c"
       (cc_compile_c_implem "%.c" "%.o");
+    
+    rule "cc: .cc -> .o include ocaml dir"
+      ~tags:["cc"; "c"]
+      ~prod:"%.o" ~dep:"%.cc"
+      (cc_compile_c_implem "%.cc" "%.o");
 
     rule "cc: .S -> .o assembly compile"
       ~prod:"%.o" ~dep:"%.S"
@@ -328,6 +336,9 @@ let _ = dispatch begin function
     flag ["c"; "compile"; "ocaml_asmrun"] & S CC.ocaml_asmrun;
     flag ["c"; "compile"; "include_system_ocaml"] & S CC.ocaml_sys_incs;
     flag ["c"; "compile"; "include_dietlibc"] & S CC.dietlibc_incs;
+    flag ["c"; "compile"; "include_ns3"] & S CC.ns3_incs;
+    flag ["ocamlmklib"; "c"; "use_asmrun"]
+      (S[A"-L/opt/godi/lib/ocaml/std-lib"; A"-lcamlrun_shared";]);
     flag ["c"; "compile"; "pic"] & S [A"-fPIC"]
   | _ -> ()
 end

@@ -43,7 +43,7 @@ function assemble_ns3 {
     exit 1
   fi
   mkdir -p ${OBJ}/lib 
-  for i in libns3run.a main.o; do
+  for i in libns3run.a main.o ns_stubs.o; do
     cp ${ROOT}/lib/_build/ns3-$1/os/runtime_ns3/$i ${OBJ}/lib/
   done
   cp ${ROOT}/lib/_build/ns3-$1/std/*.{cmi,cmx,cmxa,a,o,cmo} ${OBJ}/lib/

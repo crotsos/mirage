@@ -114,6 +114,7 @@ module Mir = struct
     let open OS in
     let ns3run mode = lib / mode / "lib" / "libns3run.a" in
     let ns3main mode = lib / mode / "lib" / "main.o" in
+    let ns3stubs mode = lib / mode / "lib" / "ns_stubs.o" in
     let mode = sprintf "ns3-%s" (env "%(mode)") in
     let asmlib = match bc,profiling with
       |true,_ -> A"-lcamlrun" 
@@ -121,12 +122,21 @@ module Mir = struct
       |false,false -> A"-lasmrun"
     in
     let dl_libs = match host with
-      |Linux -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ldl"; A"-ltermcap"]
+    |Linux -> [A"-L/usr/local/lib/"; A"-lns3-dev-applications";
+               A"-lns3-dev-core"; A"-lns3-dev-csma"; A"-lns3-dev-internet"; 
+               A"-lns3-dev-network"; A"-lns3-dev-virtual-net-device"; A"-lgsl";
+               A"-lgslcblas"; A"-lgtk-x11-2.0"; A"-lgdk-x11-2.0"; A"-latk-1.0";
+               A"-lgio-2.0"; A"-lpangoft2-1.0"; A"-lgdk_pixbuf-2.0";
+               A"-lpangocairo-1.0"; A"-lcairo"; A"-lpango-1.0"; A"-lfreetype";
+               A"-lfontconfig"; A"-lgobject-2.0"; A"-lgmodule-2.0";
+               A"-lglib-2.0"; A"-lxml2";  A"-lunix"; A"-lasmrunp"; (*
+               A"-lcamlrun_shared";  *)
+               A"-lm"; (* asmlib; *) A"-lbigarray"; A"-lcamlstr"; A"-ldl"; A"-ltermcap"]
       |Darwin |FreeBSD -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ltermcap"] in
     let tags = tags++"cc"++"c" in
     let prof = if profiling then [A"-pg"] else [] in
     Cmd (S (A cc :: [ T(tags++"link"); A ocamlc_libdir; A"-o"; Px out; 
-             A (ns3main mode); P arg; A (ns3run mode); ] @ prof @ dl_libs ))
+             A (ns3main mode);A (ns3stubs mode); P arg; A (ns3run mode); ] @ prof @ dl_libs ))
 
   let cc_ns3_bytecode_link = cc_ns3_link true
   let cc_ns3_native_link = cc_ns3_link false
@@ -184,7 +194,8 @@ module Mir = struct
       let mlprod = env mlprod in
       let acc = ref 0 in
       let mods = List.map (fun m -> incr acc; sprintf "module ForceLink%d = %s" !acc m) mods in
-      let main = sprintf "let _ = OS.Main.run (%s ())" main in
+      (* TODO: this value is static, need to extend it *)
+      let main = sprintf "OS.Topology.load (%s )" main in
       Util.safe_echo (mods @ [main]) mlprod
     |[] -> failwith "empty .mir file"
 

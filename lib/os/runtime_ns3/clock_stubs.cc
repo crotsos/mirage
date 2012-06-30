@@ -21,13 +21,18 @@
 #include <caml/fail.h>
 #include <caml/memory.h>
 
+#include <ns3/core-module.h>
+
+using namespace ns3;
+
 CAMLprim value 
 unix_gettimeofday(value v_unit)
 {
-  struct timeval tp;
-  if (gettimeofday(&tp, NULL) == -1)
-    caml_failwith("gettimeofday");
-  return caml_copy_double((double) tp.tv_sec + (double) tp.tv_usec / 1e6);
+//  struct timeval tp;
+//  if (gettimeofday(&tp, NULL) == -1)
+//    caml_failwith("gettimeofday");
+  return (double)Simulator::Now().GetMicroSeconds();
+//  return caml_copy_double((double) tp.tv_sec + (double) tp.tv_usec / 1e6);
 }
 
 static value alloc_tm(struct tm *tm)
