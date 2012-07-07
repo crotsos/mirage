@@ -21,7 +21,8 @@ type id = string
 
 type t = {
   id: id;
-(*   dev: [`tap] Socket.fd; *)
+  fd: Io_page.t Lwt_stream.t;
+  fd_push : (Io_page.t option -> unit);
   mutable active: bool;
   mac: string;
 }
@@ -37,20 +38,19 @@ let ethernet_mac_to_string x =
 
 let plug node_name id mac =
  let active = true in
-    Printf.printf "XXXXXXXXX plugging %s %d %s (%d)\n%!" 
-      node_name id (ethernet_mac_to_string mac)
-      (String.length mac);
-  let t = { id=(string_of_int id); active; mac } in
-  let _ = 
-    if (Hashtbl.mem devices node_name) then (
-      let devs = Hashtbl.find devices node_name in 
-        Hashtbl.replace devices node_name (devs @ [t])
-    ) else (
-      Hashtbl.replace devices node_name [t]
-    )
-  in
-  printf "Netif: plug %s.%d\n%!" node_name id;
-  return t
+ let (fd, fd_push) = Lwt_stream.create () in
+ let t = { id=(string_of_int id); fd; fd_push;
+           active; mac } in
+ let _ = 
+   if (Hashtbl.mem devices node_name) then (
+     let devs = Hashtbl.find devices node_name in 
+       Hashtbl.replace devices node_name (devs @ [t])
+   ) else (
+     Hashtbl.replace devices node_name [t]
+   )
+ in
+   printf "Netif: plug %s.%d\n%!" node_name id;
+   return t
 
 let _ = Callback.register "plug_dev" plug
 
@@ -83,20 +83,8 @@ let create fn =
 
 (* Input a frame, and block if nothing is available *)
 let rec input t =
-  let page = Io_page.get () in
-  let sz = 4096 in
-(*   lwt len = Socket.fdbind Activations.read (fun fd -> Socket.read fd page 0
- *   sz) t.dev in *)
-  lwt _ = Time.sleep 10.0 in 
-  let len = 0 in
-  match len with
-  |(-1) -> (* EAGAIN or EWOULDBLOCK *)
-    input t
-  |0 -> (* EOF *)
-    t.active <- false;
-    input t
-  |n ->
-    return page
+  lwt Some(page) = Lwt_stream.get t.fd in 
+    return (page)
 
 (* Get write buffer for Netif output *)
 let get_writebuf t =
