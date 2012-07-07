@@ -17,6 +17,7 @@
 open Lwt
 
 external ns3_add_node : string -> string = "ocaml_ns3_add_node"
+external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
 
 type node_t = {
   name: string;
@@ -39,9 +40,23 @@ let add_node name cb_init =
   let _ = ns3_add_node name in
     Hashtbl.replace topo.nodes name {name; cb_init;} 
 
+let add_link node_a node_b =
+  try 
+    let _ = Hashtbl.find topo.nodes node_a in 
+    let _ = Hashtbl.find topo.nodes node_b in 
+      ns3_add_link node_a node_b 
+  with Not_found -> ()
+
+let node_name = Lwt.new_key ()
+
+let exec fn () =
+  Lwt.ignore_result (fn ())
+
 let init_nodes () =
   Printf.printf "Initialising nodes....\n%!";
-  Hashtbl.iter (fun _ node -> Lwt.ignore_result(node.cb_init ())) topo.nodes
+  Hashtbl.iter (
+    fun _ node -> 
+      Lwt.with_value node_name (Some(node.name)) (exec node.cb_init) ) topo.nodes
 
 let _ = Callback.register "init" init_nodes
 

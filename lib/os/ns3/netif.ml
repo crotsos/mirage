@@ -21,63 +21,74 @@ type id = string
 
 type t = {
   id: id;
-  dev: [`tap] Socket.fd;
+(*   dev: [`tap] Socket.fd; *)
   mutable active: bool;
   mac: string;
 }
 
 exception Ethif_closed
 
-(* We must generate a fake MAC for the Unix "VM", as using the
-   tuntap one will cause all sorts of unfortunate MAC routing 
-   loops in some stacks (notably Darwin tuntap). *)
-let generate_local_mac () =
-  let x = String.create 6 in
-  let i () = Char.chr (Random.int 256) in
-  (* set locally administered and unicast bits *)
-  x.[0] <- Char.chr ((((Random.int 256) lor 2) lsr 1) lsl 1);
-  x.[1] <- i ();
-  x.[2] <- i ();
-  x.[3] <- i ();
-  x.[4] <- i ();
-  x.[5] <- i ();
-  x
-
 let devices = Hashtbl.create 1
 
-let plug id =
-  let dev = Socket.opentap id in
-  let mac = generate_local_mac () in
-  let active = true in
-  let t = { id; dev; active; mac } in
-  Hashtbl.add devices id t;
-  printf "Netif: plug %s\n%!" id;
+let ethernet_mac_to_string x =
+    let chri i = Char.code x.[i] in
+    Printf.sprintf "%02x:%02x:%02x:%02x:%02x:%02x"
+       (chri 0) (chri 1) (chri 2) (chri 3) (chri 4) (chri 5)
+
+let plug node_name id mac =
+ let active = true in
+    Printf.printf "XXXXXXXXX plugging %s %d %s (%d)\n%!" 
+      node_name id (ethernet_mac_to_string mac)
+      (String.length mac);
+  let t = { id=(string_of_int id); active; mac } in
+  let _ = 
+    if (Hashtbl.mem devices node_name) then (
+      let devs = Hashtbl.find devices node_name in 
+        Hashtbl.replace devices node_name (devs @ [t])
+    ) else (
+      Hashtbl.replace devices node_name [t]
+    )
+  in
+  printf "Netif: plug %s.%d\n%!" node_name id;
   return t
 
-let unplug id =
+let _ = Callback.register "plug_dev" plug
+
+let unplug node_name id =
   try
-    let t = Hashtbl.find devices id in
-    t.active <- false;
-    printf "Netif: unplug %s\n%!" id;
-    Hashtbl.remove devices id
+    let devs = Hashtbl.find devices node_name in
+      List.iter ( 
+        fun t ->
+          if (t.id = id) then
+            t.active <- false
+      ) devs;
+      let new_devs = List.filter (fun t -> t.id <> id) devs in
+        Hashtbl.replace devices node_name new_devs;
+        printf "Netif: unplug %s.%s\n%!" node_name id
+(*     Hashtbl.remove devices id *)
   with Not_found -> ()
 
-let tapnum = ref 0 
-   
 let create fn =
-  let name = Printf.sprintf "tap%d" !tapnum in
-  incr tapnum;
-  lwt t = plug name in
-  let user = fn name t in
-  let th,_ = Lwt.task () in
-  Lwt.on_cancel th (fun _ -> unplug name);
-  th <?> user
+  let Some(name) = Lwt.get Topology.node_name in 
+    try_lwt
+      let devs = Hashtbl.find devices name in
+      Lwt_list.iter_p (
+        fun t -> 
+          let user = fn t.id t in
+          let th,_ = Lwt.task () in
+            Lwt.on_cancel th (fun _ -> unplug name t.id);
+            th <?> user) devs 
+    with Not_found ->
+      return ()
 
 (* Input a frame, and block if nothing is available *)
 let rec input t =
   let page = Io_page.get () in
   let sz = 4096 in
-  lwt len = Socket.fdbind Activations.read (fun fd -> Socket.read fd page 0 sz) t.dev in
+(*   lwt len = Socket.fdbind Activations.read (fun fd -> Socket.read fd page 0
+ *   sz) t.dev in *)
+  lwt _ = Time.sleep 10.0 in 
+  let len = 0 in
   match len with
   |(-1) -> (* EAGAIN or EWOULDBLOCK *)
     input t
@@ -117,7 +128,9 @@ let destroy nf =
 let write t page =
   let off = Cstruct.base_offset page in
   let len = Cstruct.len page in
-  lwt len' = Socket.fdbind Activations.write (fun fd -> Socket.write fd page off len) t.dev in
+(*   lwt len' = Socket.fdbind Activations.write (fun fd -> Socket.write fd page
+ *   off len) t.dev in *)
+  let len' = 0 in 
   if len' <> len then
     raise_lwt (Failure (sprintf "tap: partial write (%d, expected %d)" len' len))
   else

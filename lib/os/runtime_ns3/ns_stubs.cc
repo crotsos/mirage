@@ -24,7 +24,6 @@
 #include <ns3/applications-module.h>
 #include <ns3/log.h>
 #include <caml/mlvalues.h>
-#include <caml/alloc.h>
 #include <caml/fail.h>
 #include <caml/memory.h>
 
@@ -43,7 +42,9 @@ extern "C" {
 
 CAMLprim value ocaml_ns3_run(value v_null);
 CAMLprim value ocaml_ns3_add_node(value ocaml_name);
+CAMLprim value ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b);
 CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
+#include <caml/alloc.h>
 #include <caml/callback.h>
 
 #ifdef  __cplusplus
@@ -54,14 +55,48 @@ CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
  * Ns3 event handler functions
  */
 
+map<string, Ptr<Node> > nodes;
+
 static void
-DeviceHandler(Ptr<NetDevice>) {
+DeviceHandler(Ptr<NetDevice> dev) {
   printf("New device registered on node\n");
+  string node_name;
+  uint8_t *mac;
+
+  // find node name 
+  map<string, Ptr<Node> >::iterator it;
+  for (it = nodes.begin(); it != nodes.end(); it++) {
+    if (dev->GetNode()->GetId() == it->second->GetId()) {
+      node_name = it->first;
+      break;
+    }
+  }
+
+  // fetch device mac address
+  mac = (uint8_t *)malloc(Address::MAX_SIZE);
+  bzero(mac, Address::MAX_SIZE);
+  dev->GetAddress().CopyTo(mac);
+  int mac_len = dev->GetAddress().GetLength();
+  CAMLlocal1( ml_mac );
+  ml_mac = caml_alloc_string(mac_len);
+  memcpy( String_val(ml_mac), mac, mac_len );
+  free(mac);
+
+  // passing event to caml code
+  caml_callback3(*caml_named_value("plug_dev"), 
+      caml_copy_string((const char *)node_name.c_str()),
+      Val_int(dev->GetIfIndex()), ml_mac);
 }
 
 static void
 TimerEventHandler(int id) {
   caml_callback(*caml_named_value("timer_wakeup"), Val_int((int)id));
+}
+
+bool
+PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, 
+    const Address &src, const Address &dst, NetDevice::PacketType type) {
+  return true;
 }
 
 CAMLprim value 
@@ -76,8 +111,6 @@ ocaml_ns3_add_timer_event(value p_ts, value p_id) {
 /*
  * Node and link manipulation function
  */
-
-map<string, Ptr<Node> > nodes;
 
 CAMLprim value
 ocaml_ns3_add_node(value ocaml_name)
@@ -96,6 +129,25 @@ ocaml_ns3_add_node(value ocaml_name)
   nodes[name]->RegisterDeviceAdditionListener(MakeCallback(&DeviceHandler));
 
   return ocaml_name;
+}
+
+CAMLprim value
+ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
+  string node_a = string(String_val(ocaml_node_a));
+  string node_b = string(String_val(ocaml_node_b));
+  fprintf(stderr, "Adding link between nodes %s - %s\n", 
+      node_a.c_str(), node_b.c_str());
+
+  // create a single node for the new host
+  NodeContainer cont = NodeContainer(nodes[node_a], nodes[node_b]);
+  CsmaHelper csma;
+  NetDeviceContainer link = csma.Install(cont);
+
+  //setup packet handler
+  link.Get(0)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+  link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+
+  return Val_unit;
 }
 
 static void

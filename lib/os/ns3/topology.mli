@@ -14,6 +14,9 @@
  *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
+val node_name: string Lwt.key
+
 val load: (unit -> unit) -> unit
 
 val add_node: string -> (unit -> unit Lwt.t) -> unit
+val add_link: string -> string -> unit
