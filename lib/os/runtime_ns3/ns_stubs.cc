@@ -57,20 +57,26 @@ CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
 
 map<string, Ptr<Node> > nodes;
 
+static string
+getHostName(Ptr<NetDevice> dev) {
+  // find node name 
+  map<string, Ptr<Node> >::iterator it;
+  for (it = nodes.begin(); it != nodes.end(); it++) {
+    if (dev->GetNode()->GetId() == it->second->GetId()) {
+      return it->first;
+    }
+  }
+
+  return string("");
+}
+
 static void
 DeviceHandler(Ptr<NetDevice> dev) {
   printf("New device registered on node\n");
   string node_name;
   uint8_t *mac;
 
-  // find node name 
-  map<string, Ptr<Node> >::iterator it;
-  for (it = nodes.begin(); it != nodes.end(); it++) {
-    if (dev->GetNode()->GetId() == it->second->GetId()) {
-      node_name = it->first;
-      break;
-    }
-  }
+  node_name = getHostName(dev);
 
   // fetch device mac address
   mac = (uint8_t *)malloc(Address::MAX_SIZE);
@@ -96,6 +102,16 @@ TimerEventHandler(int id) {
 bool
 PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, 
     const Address &src, const Address &dst, NetDevice::PacketType type) {
+  
+  // get a new io page
+  value frame = caml_callback(*caml_named_value("get_frame"), Val_unit);
+
+  // copy frame data to io_page
+  
+  // find host name
+  
+  // call packet handling code in caml
+  
   return true;
 }
 

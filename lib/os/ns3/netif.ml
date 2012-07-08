@@ -53,6 +53,7 @@ let plug node_name id mac =
    return t
 
 let _ = Callback.register "plug_dev" plug
+let _ = Callback.register "get_frame" Io_page.get
 
 let unplug node_name id =
   try
