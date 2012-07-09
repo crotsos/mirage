@@ -17,6 +17,8 @@
 #include <iostream>
 #include <fstream>
 
+#include <arpa/inet.h>
+
 #include <ns3/core-module.h>
 #include <ns3/network-module.h>
 #include <ns3/csma-module.h>
@@ -25,7 +27,6 @@
 #include <ns3/log.h>
 #include <caml/mlvalues.h>
 #include <caml/fail.h>
-#include <caml/memory.h>
 
 #include <hash_map>
 
@@ -44,8 +45,13 @@ CAMLprim value ocaml_ns3_run(value v_null);
 CAMLprim value ocaml_ns3_add_node(value ocaml_name);
 CAMLprim value ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b);
 CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
+CAMLprim value caml_pkt_write(value v_node_name, value v_id, value v_ba, 
+    value v_off, value v_len);
+
 #include <caml/alloc.h>
 #include <caml/callback.h>
+#include <caml/bigarray.h>
+#include <caml/memory.h>
 
 #ifdef  __cplusplus
 }
@@ -56,6 +62,7 @@ CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
  */
 
 map<string, Ptr<Node> > nodes;
+void hexdump(uint8_t *buf, int len);
 
 static string
 getHostName(Ptr<NetDevice> dev) {
@@ -102,17 +109,78 @@ TimerEventHandler(int id) {
 bool
 PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, 
     const Address &src, const Address &dst, NetDevice::PacketType type) {
-  
+  printf("process pkt\n");
+
+  CAMLlocal1(v_inf);
+
   // get a new io page
   value frame = caml_callback(*caml_named_value("get_frame"), Val_unit);
 
   // copy frame data to io_page
-  
+  uint8_t *buf = (uint8_t *)Caml_ba_data_val(frame);
+  pkt->CopyData(buf, 4096);
+  //hexdump(buf, pkt->GetSize());
+
   // find host name
-  
+  string node_name = getHostName(dev);
+
+  v_inf = caml_alloc_tuple(2);
+  Store_field(v_inf, 0, Val_int(pkt->GetSize()));
+  Store_field(v_inf, 1, frame);
+ 
   // call packet handling code in caml
-  
+  caml_callback3(*caml_named_value("demux_pkt"), 
+      caml_copy_string((const char *)node_name.c_str()),
+      Val_int(dev->GetIfIndex()), v_inf);
+ 
   return true;
+}
+
+void 
+hexdump(uint8_t *buf, int len) {
+  int p = 0;
+  int count = 0;
+
+  while(p < len) {
+    printf("%02x", buf[p]);
+    if(count == 7)
+      printf(" ");
+    else if(count == 15)
+      printf("\n");
+    p++;
+    if(count == 15)
+      count = 0;
+    else
+      count++;
+  }
+  printf("\n");
+}
+
+CAMLprim value
+caml_pkt_write(value v_node_name, value v_id, value v_ba, 
+    value v_off, value v_len) {
+  CAMLparam5(v_node_name, v_id, v_ba, v_off, v_len);
+  int ifIx = Int_val(v_id);
+  string node_name = string(String_val(v_node_name));
+
+  //get a pointer to the packet byte data
+  uint8_t *buf = (uint8_t *) Caml_ba_data_val(v_ba);
+  int len = Int_val(v_len), off = Int_val(v_off);
+  Ptr< Packet> pkt = Create<Packet>(buf + off, len );
+  //hexdump(buf, len);
+  
+  // rther proto of the packet. 
+  uint16_t proto = ntohs(*(uint16_t *)(buf + off + 12));
+
+  // find the the right device for the node and send packet
+  Ptr<Node> node = nodes[node_name];
+  for (int i = 0; i < node->GetNDevices (); i++) 
+    if(node->GetDevice(i)->GetIfIndex() == ifIx) { 
+      node->GetDevice(i)->Send(pkt, 
+          Mac48Address ((const char *) (buf+off)), proto);
+    }
+
+  return Val_unit; 
 }
 
 CAMLprim value 
@@ -162,6 +230,10 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   //setup packet handler
   link.Get(0)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+
+  //capture pcap trace
+  string filename = string("openflow-switch-")+node_a+string("-")+node_b;
+  csma.EnablePcapAll (filename, false);
 
   return Val_unit;
 }

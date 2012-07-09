@@ -71,6 +71,8 @@ let timeout d = sleep d >> Lwt.fail Timeout
 let with_timeout d f = Lwt.pick [timeout d; Lwt.apply f ()]
 
 let wakeup_thread id =
+  Lwt.wakeup_paused ();
+(*   Lwt.wakeup_all (); *)
   let thread = Hashtbl.find sleeping_threads id in 
   match thread with 
   |  { canceled = true } -> 

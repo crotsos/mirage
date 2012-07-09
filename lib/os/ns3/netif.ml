@@ -21,11 +21,13 @@ type id = string
 
 type t = {
   id: id;
-  fd: Io_page.t Lwt_stream.t;
-  fd_push : (Io_page.t option -> unit);
+  fd: (int * Io_page.t) Lwt_stream.t;
+  fd_push : ((int * Io_page.t) option -> unit);
   mutable active: bool;
   mac: string;
 }
+
+external pkt_write: string -> int -> Io_page.t -> int -> int -> unit = "caml_pkt_write"
 
 exception Ethif_closed
 
@@ -54,6 +56,18 @@ let plug node_name id mac =
 
 let _ = Callback.register "plug_dev" plug
 let _ = Callback.register "get_frame" Io_page.get
+
+let demux_pkt node_name dev_id frame = 
+  try
+    let devs = Hashtbl.find devices node_name in 
+      List.iter (fun dev -> 
+                   if (dev.id = (string_of_int dev_id)) then
+                     dev.fd_push (Some(frame))
+      ) devs 
+  with Not_found ->
+    Printf.printf "Packet cannot be processed for node %s\n" node_name
+let _ = Callback.register "demux_pkt" demux_pkt
+
 
 let unplug node_name id =
   try
@@ -84,7 +98,7 @@ let create fn =
 
 (* Input a frame, and block if nothing is available *)
 let rec input t =
-  lwt Some(page) = Lwt_stream.get t.fd in 
+  lwt Some((len, page)) = Lwt_stream.get t.fd in 
     return (page)
 
 (* Get write buffer for Netif output *)
@@ -119,10 +133,14 @@ let write t page =
   let len = Cstruct.len page in
 (*   lwt len' = Socket.fdbind Activations.write (fun fd -> Socket.write fd page
  *   off len) t.dev in *)
+  let Some(node_name) = Lwt.get Topology.node_name in 
+  let _ = pkt_write node_name (int_of_string t.id) page off len in 
+(*    Lwt.wakeup_paused ();
+
   let len' = 0 in 
   if len' <> len then
     raise_lwt (Failure (sprintf "tap: partial write (%d, expected %d)" len' len))
-  else
+  else *)
     return ()
 
 
