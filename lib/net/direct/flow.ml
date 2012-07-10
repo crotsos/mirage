@@ -67,7 +67,19 @@ module TCPv4 = struct
     th
 
   let connect mgr ?src dst fn =
+    let (addr, port) = dst in
+    let tcp = Manager.tcpv4_of_dst_addr mgr addr in
+    lwt conn = Tcp.Pcb.connect tcp addr port in
+      match conn with 
+      | None -> 
+          (Printf.printf "Failed to connect to %s:%d\n%!" 
+            (Nettypes.ipv4_addr_to_string addr)  port;
+          return ())
+      | Some (fl, _) -> fn fl
+(*
+    Printf.printf "XXXXXXXXXXXXX connect Not_implemented\n%!";
     fail (Failure "Not_implemented")
+ *)
 
 end
 

@@ -43,6 +43,8 @@ val send_raw: t -> id -> (Bitstring.t list)  -> unit Lwt.t
 *)
 
 val tcpv4_of_addr : t -> ipv4_addr option -> Tcp.Pcb.t list
+val tcpv4_of_dst_addr : t -> ipv4_addr -> Tcp.Pcb.t
+
 val udpv4_of_addr : t -> ipv4_addr option -> Udp.t list
 val ipv4_of_interface : interface -> Ipv4.t
 val get_intf : interface -> string

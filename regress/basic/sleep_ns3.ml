@@ -51,6 +51,7 @@ let run_inner () =
   let t4 = "four", 5, 3.2 in
   let r t = iter t >> return () in
   let test = 
+  try_lwt 
     Net.Manager.create (fun mgr interface id ->
       Printf.printf "XXXXXX Manager callback\n%!";
       let ip node_id = 
@@ -81,7 +82,10 @@ let run_inner () =
                         return (Log.info "Channel_client_echo" "done!")) 
               )
             | true -> Manager.configure interface (`DHCP)
-      )) 
+      ))
+    with e ->
+     Printf.eprintf "Error: %s" (Printexc.to_string e); 
+     return ()
 (*                    in *)
   in  
   join [ test; r t1; r t2; r t3; r t4]

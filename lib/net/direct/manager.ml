@@ -183,9 +183,38 @@ let i_of_ip t addr =
        ) t.listeners [];
      end
 
+let match_ip_match ip netmask dst_ip =
+  let src_match = Int32.logand ip netmask in 
+  let dst_match = Int32.logand dst_ip netmask in
+    (src_match = dst_match)
+
+(* Get an appropriate interface for a dest ip *)
+let i_of_dst_ip t addr =
+  let ret = ref None in 
+  let netmask = ref 0l in   
+  let _ = Hashtbl.iter 
+      (fun _ (i,_) ->
+         let l_ip =  Ipv4.get_ip i.ipv4 in
+         let l_mask = Ipv4.get_netmask i.ipv4 in 
+           (* Need to consider also default gateways as 
+           * well as same subnet forwarding *)
+          if (( (Int32.logor (!netmask) l_mask) <> !netmask) && 
+               (match_ip_match l_ip l_mask addr)) then (
+                 ret := Some(i);
+                 netmask :=  Ipv4.get_netmask i.ipv4
+               )
+      ) t.listeners in
+    match !ret with
+      | None -> failwith("No_Path_dst")
+      | Some(ret) -> ret
+
 (* Match an address and port to a TCP thread *)
 let tcpv4_of_addr t addr =
   List.map (fun x -> x.tcp) (i_of_ip t addr)
+let tcpv4_of_dst_addr t addr =
+  let x = i_of_dst_ip t addr in
+    x.tcp
+
 
 (* TODO: do actual route selection *)
 let udpv4_of_addr (t:t) addr =

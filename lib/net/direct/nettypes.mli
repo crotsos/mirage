@@ -23,7 +23,7 @@ val ethernet_mac_to_bytes : ethernet_mac -> bytes
 val ethernet_mac_to_string : ethernet_mac -> string
 val ethernet_mac_broadcast: ethernet_mac
 
-type ipv4_addr
+type ipv4_addr  = int32
 val ipv4_addr_of_tuple : (int32 * int32 * int32 * int32) -> ipv4_addr
 val ipv4_addr_of_string : string -> ipv4_addr option
 val ipv4_addr_to_string : ipv4_addr -> string
@@ -61,7 +61,7 @@ module type FLOW = sig
   val close : t -> unit Lwt.t
 
   val listen : mgr -> src -> (dst -> t -> unit Lwt.t) -> unit Lwt.t
-  val connect : mgr -> ?src:src -> dst -> (t -> 'a Lwt.t) -> 'a Lwt.t
+  val connect : mgr -> ?src:src -> dst -> (t -> unit Lwt.t) -> unit Lwt.t
 end
 
 module type DATAGRAM = sig
@@ -98,7 +98,7 @@ module type CHANNEL = sig
   val close : t -> unit Lwt.t
 
   val listen : mgr -> src -> (dst -> t -> unit Lwt.t) -> unit Lwt.t
-  val connect : mgr -> ?src:src -> dst -> (t -> 'a Lwt.t) -> 'a Lwt.t
+  val connect : mgr -> ?src:src -> dst -> (t -> unit Lwt.t) -> unit Lwt.t
 end
 
 module type RPC = sig
