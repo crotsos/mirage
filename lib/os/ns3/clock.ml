@@ -26,8 +26,8 @@ type tm = {
   tm_isdst : bool;
 }
 
-external time : unit -> float = "unix_gettimeofday"
-external gmtime : float -> tm = "unix_gmtime"
+external time : unit -> float = "ns3_gettimeofday"
+external gmtime : float -> tm = "ns3_gmtime"
 
 let () =
   Log.set_date (fun () ->

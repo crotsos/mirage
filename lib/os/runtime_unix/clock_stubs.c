@@ -25,6 +25,9 @@ CAMLprim value
 unix_gettimeofday(value v_unit)
 {
   struct timeval tp;
+  
+  printf("Hello world... this is unix backend\n");
+  
   if (gettimeofday(&tp, NULL) == -1)
     caml_failwith("gettimeofday");
   return caml_copy_double((double) tp.tv_sec + (double) tp.tv_usec / 1e6);

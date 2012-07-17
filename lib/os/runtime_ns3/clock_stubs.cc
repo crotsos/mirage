@@ -16,22 +16,35 @@
 
 #include <time.h>
 #include <sys/time.h>
-#include <caml/mlvalues.h>
-#include <caml/alloc.h>
-#include <caml/fail.h>
-#include <caml/memory.h>
 
 #include <ns3/core-module.h>
 
 using namespace ns3;
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
+#include <caml/alloc.h>
+#include <caml/mlvalues.h>
+#include <caml/fail.h>
+#include <caml/memory.h>
+
+CAMLprim value ns3_gettimeofday(value v_unit);
+CAMLprim value ns3_gmtime(value t);
+
+#ifdef  __cplusplus
+}
+#endif
 
 CAMLprim value 
-unix_gettimeofday(value v_unit)
+ns3_gettimeofday(value v_unit)
 {
+   CAMLparam1(v_unit);
 //  struct timeval tp;
 //  if (gettimeofday(&tp, NULL) == -1)
 //    caml_failwith("gettimeofday");
-  return (double)Simulator::Now().GetMicroSeconds();
+  CAMLreturn( caml_copy_double(
+        (double)(Simulator::Now().GetMicroSeconds()/1e6)));
 //  return caml_copy_double((double) tp.tv_sec + (double) tp.tv_usec / 1e6);
 }
 
@@ -51,7 +64,7 @@ static value alloc_tm(struct tm *tm)
   return res;
 }
 
-CAMLprim value unix_gmtime(value t)
+CAMLprim value ns3_gmtime(value t)
 {
   time_t clock;
   struct tm * tm;
