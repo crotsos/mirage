@@ -16,6 +16,7 @@
 
 type t = Cstruct.buf
 
+val create: int -> t
 val get : unit -> t
 val get_n : int -> t list
 
