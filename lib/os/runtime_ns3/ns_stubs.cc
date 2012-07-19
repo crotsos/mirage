@@ -105,9 +105,7 @@ getHostName(Ptr<NetDevice> dev) {
 int event_counter;
 static void
 TimerEventHandler(int id) {
-  printf("event handler begin...\n");
   caml_callback(*caml_named_value("timer_wakeup"), Val_int((int)id));
-  printf("event handler end...\n");
 }
 
 CAMLprim value 
@@ -150,16 +148,14 @@ DeviceHandler(Ptr<NetDevice> dev) {
 bool
 PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, 
     const Address &src, const Address &dst, NetDevice::PacketType type) {
-  CAMLlocal1( ml_data );
-  printf("packet demux...\n");
-  fprintf(stdout, "%f: receiving %u packet done...\n", 
-      (long)Simulator::Now().GetMicroSeconds() / 1e6, pkt->GetSize());
-  fflush(stdout);
-
+//  printf("packet demux...\n");
+ 
+  value ml_data;
+  caml_register_global_root(&ml_data);
   int pkt_len = pkt->GetSize();
   ml_data = caml_alloc_string(pkt_len);
   pkt->CopyData((uint8_t *)String_val(ml_data), pkt_len);
-
+  
   // find host name
   string node_name = getHostName(dev);
 
@@ -168,7 +164,8 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto,
   caml_callback3(*caml_named_value("demux_pkt"), 
       caml_copy_string((const char *)node_name.c_str()),
       Val_int(dev->GetIfIndex()), ml_data );
-  printf("packet demux end...\n");
+  caml_remove_global_root(&ml_data);
+//  printf("packet demux end...\n");
   return true;
 }
 
@@ -176,16 +173,15 @@ CAMLprim value
 caml_pkt_write(value v_node_name, value v_id, value v_ba, 
     value v_off, value v_len) {
   CAMLparam5(v_node_name, v_id, v_ba, v_off, v_len);
-  printf("sending packet begin...\n");
   
   uint32_t ifIx = (uint32_t)Int_val(v_id);
   string node_name = string(String_val(v_node_name));
+  int len = Int_val(v_len), off = Int_val(v_off);
 
   //get a pointer to the packet byte data
   uint8_t *buf = (uint8_t *) Caml_ba_data_val(v_ba);
-  int len = Int_val(v_len), off = Int_val(v_off);
-  Ptr< Packet> pkt = Create<Packet>(buf + off, len );
-  
+  Ptr< Packet> pkt = Create<Packet>(buff + off, len );
+
   // rther proto of the packet. 
   uint16_t proto = ntohs(*(uint16_t *)(buf + off + 12));
 
@@ -193,19 +189,13 @@ caml_pkt_write(value v_node_name, value v_id, value v_ba,
   Ptr<Node> node = nodes[node_name];
 
   Mac48Address mac_dst;
-  mac_dst.CopyFrom(buf+off);
+  mac_dst.CopyFrom(buf + off);
   for (uint32_t i = 0; i < node->GetNDevices (); i++) 
     if(node->GetDevice(i)->GetIfIndex() == ifIx) { 
       if(!node->GetDevice(i)->Send(pkt, mac_dst, proto))
         fprintf(stdout, "%f: packet dropped...\n",
             (long)Simulator::Now().GetMicroSeconds() / 1e6);
-      fprintf(stdout, "%f: (left pkt %u) sending %u packet done...\n", 
-          (long)Simulator::Now().GetMicroSeconds() / 1e6, 
-          node->GetDevice(i)->GetObject<CsmaNetDevice>()->GetQueue()->GetNPackets(),
-          pkt->GetSize());
-      fflush(stdout);    
     }
-  printf("sending packet end...\n");
   CAMLreturn( Val_unit ); 
 }
 

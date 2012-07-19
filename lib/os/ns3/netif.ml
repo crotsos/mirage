@@ -65,7 +65,6 @@ let _ = Callback.register "get_frame" Io_page.get
 let demux_pkt node_name dev_id frame = 
 (*   Lwt.wakeup_paused (); *)
   try_lwt
-    Gc.compact();   
     let devs = Hashtbl.find devices node_name in 
       Lwt_list.iter_p
       (fun dev -> 
@@ -115,10 +114,14 @@ let create fn =
 (* Input a frame, and block if nothing is available *)
 let rec input t =
 (*   let Some(node_name) = (Lwt.get Topology.node_name) in *)
-(*   Gc.compact() ; *)
-  lwt Some((len, page)) = Lwt_stream.get t.fd in
+  try_lwt 
+(*     Gc.compact();    *)
+    lwt Some((len, page)) = Lwt_stream.get t.fd in
 (*   Printf.printf "Read a packet from thread %s\n%!" node_name; *)
-    return (page)
+      return (page)
+  with e ->
+    Printf.printf "input error: %s\n%!" (Printexc.to_string e);
+    failwith "Netif.input error" 
 
 (* Get write buffer for Netif output *)
 let get_writebuf t =
@@ -135,7 +138,8 @@ let rec listen t fn =
       try_lwt 
         fn frame
       with exn ->
-        return (printf "EXN: %s bt: %s\n%!" (Printexc.to_string exn) (Printexc.get_backtrace()))
+        return (printf "EXN: %s bt: %s\n%!" (Printexc.to_string exn) 
+                  (Printexc.get_backtrace()))
     );
     listen t fn
   |false ->
@@ -174,7 +178,8 @@ let write t page =
         wait_for_queue t
     in
   lwt _ = wait_for_queue t in
-  let _ = pkt_write node_name (int_of_string t.id) page off len in 
+    let _ = pkt_write node_name (int_of_string t.id) page off len in
+    Gc.compact() ; 
     return ()
 
 
