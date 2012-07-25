@@ -153,8 +153,13 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto,
   value ml_data;
   caml_register_global_root(&ml_data);
   int pkt_len = pkt->GetSize();
-  ml_data = caml_alloc_string(pkt_len);
-  pkt->CopyData((uint8_t *)String_val(ml_data), pkt_len);
+  ml_data = caml_alloc_string(pkt_len + 14);
+  uint8_t *data = (uint8_t *)String_val(ml_data);
+  pkt->CopyData(data + 14, pkt_len);
+  dst.CopyTo(data);
+  src.CopyTo(data + 6);
+  proto = htons(proto);
+  memcpy(data + 12, &proto, 2);
   
   // find host name
   string node_name = getHostName(dev);
@@ -180,7 +185,7 @@ caml_pkt_write(value v_node_name, value v_id, value v_ba,
 
   //get a pointer to the packet byte data
   uint8_t *buf = (uint8_t *) Caml_ba_data_val(v_ba);
-  Ptr< Packet> pkt = Create<Packet>(buff + off, len );
+  Ptr< Packet> pkt = Create<Packet>(buf + off + 14, len - 14);
 
   // rther proto of the packet. 
   uint16_t proto = ntohs(*(uint16_t *)(buf + off + 12));
@@ -276,8 +281,9 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   // create a single node for the new host
   NodeContainer cont = NodeContainer(nodes[node_a], nodes[node_b]);
   CsmaHelper csma;
-  csma.SetChannelAttribute("Delay", TimeValue (MilliSeconds (1)));
-  
+//  csma.SetChannelAttribute("Delay", TimeValue (MilliSeconds (1)));
+  csma.SetChannelAttribute("DataRate", DataRateValue (DataRate (10000000)));
+
   Ptr<DropTailQueue> q = Create<DropTailQueue>();
   csma.SetDeviceAttribute("TxQueue", PointerValue(q));
 
