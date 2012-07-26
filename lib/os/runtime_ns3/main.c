@@ -24,6 +24,7 @@ main(int argc, char **argv)
 {
   signal(SIGPIPE, SIG_IGN);
   fprintf(stderr, "Main: startup\n");
+  ns3_init();
   caml_startup(argv);
   fprintf(stderr, "Main: end\n");
   return 0;
