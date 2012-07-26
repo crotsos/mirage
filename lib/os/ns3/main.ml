@@ -23,7 +23,7 @@
 
 open Lwt
 
-external ns3_run : unit -> int = "ocaml_ns3_run" 
+external ns3_run : int -> int = "ocaml_ns3_run" 
 
 let exit_hooks = Lwt_sequence.create ()
 let enter_hooks = Lwt_sequence.create ()
@@ -50,7 +50,7 @@ open Printf
    once and once only. *)
 let run t =
   Printexc.record_backtrace true;
-  let _ = ns3_run () in
+  let _ = ns3_run (Time.get_duration ()) in
   ()
 
 let () = at_exit (fun () -> run (call_hooks exit_hooks))

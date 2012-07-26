@@ -16,4 +16,7 @@
 
 val restart_threads: (unit -> float) -> unit
 val select_next : (unit -> float) -> float option
+val set_duration : int -> unit
+val get_duration : unit -> int
+
 val sleep : float -> unit Lwt.t
