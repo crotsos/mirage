@@ -28,6 +28,7 @@ let run_inner () =
           [ ipv4_addr_of_tuple (10l,0l,1l,1l) ]
           )) in     
       lwt _ = Manager.configure interface (`IPv4 ip) in
+      let _ = printf "Intf configured...\n%!" in
       lwt () = Net.Channel.listen mgr 
       (`TCPv4 ((None, port), echo)) in 
       return ()
@@ -40,4 +41,4 @@ let run_inner () =
 let run () =
   Time.set_duration 60;
   OS.Topology.add_node "node1" run_inner;
-  OS.Topology.add_external_dev "nstap0" "node1" "10.0.1.0" "255.255.255.0"
+  OS.Topology.add_external_dev "nstap0" "node1" "10.0.1.1" "255.255.255.0"
