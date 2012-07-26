@@ -18,6 +18,7 @@ open Lwt
 
 external ns3_add_node : string -> string = "ocaml_ns3_add_node"
 external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
+external ns3_add_net_intf : string -> string -> string -> string -> unit = "ns3_add_net_intf"
 
 type node_t = {
   name: string;
@@ -26,10 +27,11 @@ type node_t = {
 
 type topo_t = {
   nodes : (string, node_t) Hashtbl.t;
-}
+} 
 
 let topo = 
   {nodes=(Hashtbl.create 64);}
+
 
 let load t =
   Printf.printf "OS.Topology started...\n%!";
@@ -39,6 +41,21 @@ let load t =
 let add_node name cb_init =
   let _ = ns3_add_node name in
     Hashtbl.replace topo.nodes name {name; cb_init;} 
+
+let no_act_init () =
+  return ()
+
+let add_external_dev dev node ip mask =
+(*  let (ip, mask) = 
+    match config with 
+    | `DHCP ->
+      eprintf "DHCP cannot be assigned to an external dev\n%!";
+      failwith "DHCP cannot be assigned to an external dev"
+    | `IPv4 (ip, mask, gws) ->
+      (ip, mask)
+  in *)
+  Hashtbl.replace topo.nodes dev {name=dev; cb_init=no_act_init;};
+  ns3_add_net_intf dev node ip mask
 
 let add_link node_a node_b =
   try 

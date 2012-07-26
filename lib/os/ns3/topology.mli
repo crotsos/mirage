@@ -20,3 +20,5 @@ val load: (unit -> unit) -> unit
 
 val add_node: string -> (unit -> unit Lwt.t) -> unit
 val add_link: string -> string -> unit
+val add_external_dev: string -> string -> string -> string -> unit
+
