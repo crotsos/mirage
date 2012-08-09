@@ -117,12 +117,6 @@ let plug_raw t id vif =
     Hashtbl.add t.listeners id (i,th);
     printf "Manager: plug_raw done, to listener\n%!";
     t.listener t i id
-
-let plug_xen_switch t id vif =
-  if ((int_of_string id) == 0) then
-    plug t id vif
-  else
-    plug_raw t id vif 
 *)
 
 (* Unplug a network interface and cancel all its threads. *)
@@ -136,7 +130,7 @@ let unplug t id =
 (* Enumerate interfaces and manage the protocol threads.
  The listener becomes a new thread that is spawned when a 
  new interface shows up. *)
-let create listener =
+let create ?( plug = plug ) listener =
   printf "Manager: create\n%!";
   let listeners = Hashtbl.create 1 in
   let t = { listener; listeners } in

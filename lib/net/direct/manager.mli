@@ -33,7 +33,8 @@ val unplug: t -> id -> unit
 
 val configure: interface -> config -> unit Lwt.t
  
-val create : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
+val create : ?plug:(t -> id -> OS.Netif.t -> unit Lwt.t) 
+  -> (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
 
 (*
 val create_raw : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
