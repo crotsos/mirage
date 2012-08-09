@@ -185,8 +185,6 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto,
   // find host name
   string node_name = getHostName(dev);
 
-  printf("packet demux %s %d...\n", node_name.c_str(), dev->GetIfIndex());
- 
   //printf("node %s.%d packet\n", node_name.c_str(), dev->GetIfIndex());
   // call packet handling code in caml
   caml_callback3(*caml_named_value("demux_pkt"), 
