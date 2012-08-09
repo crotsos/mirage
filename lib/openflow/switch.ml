@@ -1,5 +1,6 @@
 (*
  * Copyright (c) 2011 Richard Mortier <mort@cantab.net>
+ * Copyright (c) 2011 Charalampos Rotsos <cr409@cl.cam.ac.uk>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -52,27 +53,12 @@ module Entry = struct
 
    mutable priority: uint16;
    mutable cookie: int64;
-   mutable insert_secs: uint32;
-   mutable insert_nsecs: uint32;
-   mutable last_secs: uint32;
+   mutable insert_sec: uint32;
+   mutable insert_nsec: uint32;
+   mutable last_sec: uint32;
    mutable last_nsec: uint32;
    mutable idle_timeout: int;
    mutable hard_timeout:int;
-  }
-
-  type port_counter = {
-    mutable rx_packets: uint64;
-    mutable tx_packets: uint64;
-    mutable rx_bytes: uint64;
-    mutable tx_bytes: uint64;
-    mutable rx_drops: uint64;
-    mutable tx_drops: uint64;
-    mutable rx_errors: uint64;
-    mutable tx_errors: uint64;
-    mutable rx_alignment_errors: uint64;
-    mutable rx_overrun_errors: uint64;
-    mutable rx_crc_errors: uint64;
-    mutable n_collisions: uint64;
   }
 
   type queue_counter = {
@@ -81,37 +67,43 @@ module Entry = struct
     tx_queue_overrun_errors: uint64;
   }
 
-  type counters = {
-    per_table: table_counter list;
-    per_flow: flow_counter list;
-    per_port: port_counter list;
-    per_queue: queue_counter list;
-  }
-
   let init_flow_counters () =
     {n_packets=(Int64.of_int 0);
     n_bytes= (Int64.of_int 0);
 
     priority= 0; cookie= (Int64.of_int 0); 
-    insert_secs=(Int32.of_float (OS.Clock.time()));
-    insert_nsecs=0l;
-    last_secs=(Int32.of_float (OS.Clock.time())); 
+    insert_sec=(Int32.of_float (OS.Clock.time()));
+    insert_nsec=0l;
+    last_sec=(Int32.of_float (OS.Clock.time())); 
     last_nsec=0l;
         idle_timeout=0; hard_timeout=0;}
-  let init_port_counters () ={
-    rx_packets=0L; tx_packets=0L;
-    rx_bytes=0L; tx_bytes=0L;
-    rx_drops=0L; tx_drops=0L;
-    rx_errors=0L; tx_errors=0L;
-    rx_alignment_errors=0L;
-    rx_overrun_errors=0L;
-    rx_crc_errors=0L; n_collisions=0L;}
-  
+
+
   type t = { 
-    (* fields: OP.Match.t list; *)
     counters: flow_counter;
     actions: OP.Flow.action list;
+    mutable cache_entries: OP.Match.t list;
   }
+  let update_flow pkt_len flow = 
+    flow.counters.n_packets <- Int64.add flow.counters.n_packets 1L;
+    flow.counters.n_bytes <- Int64.add flow.counters.n_bytes pkt_len;
+    let ts = OS.Clock.time () in 
+      flow.counters.last_sec <- (Int32.of_float ts)
+
+
+  let flow_counters_to_flow_stats of_match table_id flow =
+    let priority = flow.counters.priority in
+    let idle_timeout=flow.counters.idle_timeout in
+    let hard_timeout=flow.counters.hard_timeout in
+    let cookie=flow.counters.cookie in
+    let packet_count=flow.counters.n_packets in
+    let byte_count=flow.counters.n_bytes in
+    let action=flow.actions in
+    OP.Flow.({table_id; of_match; 
+    duration_sec=(Int32.sub flow.counters.last_sec flow.counters.insert_sec);
+    duration_nsec=(Int32.sub flow.counters.last_nsec flow.counters.insert_nsec);
+    priority; idle_timeout; hard_timeout; cookie;
+    packet_count; byte_count; action; })
 
 end
 
@@ -119,24 +111,31 @@ module Table = struct
   type t = {
     tid: cookie;
     (* This stores entries as they arrive *)
-    mutable entries: (OP.Match.t, Entry.t ref) Hashtbl.t;
+    mutable entries: (OP.Match.t, Entry.t) Hashtbl.t;
     (* This stores only exact match entries.*)
     (* TODO delete an entry from both tables *)
     mutable cache : (OP.Match.t, Entry.t ref) Hashtbl.t;
-    mutable lookup: uint64;
-    mutable missed: uint64;
+    stats : OP.Stats.table;
   }
+
+  let update_table_found table = 
+    table.stats.OP.Stats.lookup_count <- Int64.add
+    table.stats.OP.Stats.lookup_count 1L;
+    table.stats.OP.Stats.matched_count <- 
+      Int64.add table.stats.OP.Stats.matched_count 1L
+
+  let update_table_missed table =
+    table.stats.OP.Stats.lookup_count <- Int64.add
+    table.stats.OP.Stats.lookup_count 1L
 end
 
 module Switch = struct
   type port = {
-    (* details: OP.Port.phy; *)
     port_id: int;
+    ethif: OS.Netif.t; 
     port_name: string;
     mgr: Net.Manager.t;
-    counter: Entry.port_counter;
-    (* device: device; *)
-    (* port_id: (OS.Netif.id, int) Hashtbl.t; *)
+    counter: OP.Port.stats;
   }
 
   type stats = {
@@ -146,413 +145,255 @@ module Switch = struct
     mutable n_lost: uint64;
   }
 
-
   type lookup_ret = 
          Found of Entry.t ref
        | NOT_FOUND
 
   type t = {
     (* Mapping Netif objects to ports *)
-    mutable ports: (OS.Netif.id, port ref) Hashtbl.t;
+    mutable dev_to_port: (OS.Netif.id, port ref) Hashtbl.t;
 
     (* Mapping port ids to port numbers *)
-    mutable int_ports: (int, port ref) Hashtbl.t;
-    mutable port_feat : OP.Port.phy list;
+    mutable int_to_port: (int, port ref) Hashtbl.t;
+    mutable ports : port list;
     mutable controllers: (Net.Channel.t) list;
     table: Table.t;
     stats: stats;
     p_sflow: uint32; (** probability for sFlow sampling *)
     mutable errornum : uint32; 
     mutable portnum : int;
-    packet_queue : (Bitstring.t * string) Lwt_stream.t;
-    push_packet : ((Bitstring.t * string) option -> unit);
+    packet_queue : (Cstruct.buf * OS.Netif.id) Lwt_stream.t;
+    push_packet : ((Cstruct.buf * OS.Netif.id) option -> unit);
     mutable queue_len : int;
+    features : OP.Switch.features;
   }
+  let init_port_counters port_id =
+    OP.Port.({ port_id;
+    rx_packets=0L; tx_packets=0L; rx_bytes=0L; tx_bytes=0L;
+    rx_dropped=0L; tx_dropped=0L; rx_errors=0L; tx_errors=0L;
+    rx_frame_err=0L; rx_over_err=0L;
+    rx_crc_err=0L; collisions=0L;})
 
-  let bitstring_of_port port = 
-    BITSTRING{ port.port_id:16; 0L:48; 
-        port.counter.Entry.rx_packets:64; 
-        port.counter.Entry.tx_packets:64; (* Receive/transmit bytes *)
-        port.counter.Entry.rx_bytes:64; 
-        port.counter.Entry.tx_bytes:64; 
-        port.counter.Entry.rx_drops:64; 
-        port.counter.Entry.tx_drops:64; 
-        port.counter.Entry.rx_errors:64; 
-        port.counter.Entry.tx_errors:64; 
-        port.counter.Entry.rx_alignment_errors:64; 
-        port.counter.Entry.rx_overrun_errors:64; 
-        port.counter.Entry.rx_crc_errors:64; (* Receive/transmit packets *)
-        port.counter.Entry.n_collisions:64}
+  let update_port_tx_stats pkt_len port = 
+    port.counter.OP.Port.tx_packets <- (Int64.add 
+      port.counter.OP.Port.tx_packets 1L);
+    port.counter.OP.Port.tx_bytes <- (Int64.add 
+      port.counter.OP.Port.tx_bytes pkt_len)
 
-  let forward_frame st in_port port frame pkt_size =
-(*
-      Printf.printf "Outputing frame to port %s\n" (OP.Port.string_of_port
-       port);
- *)
-    if (frame = Bitstring.empty_bitstring) then 
-      return ()
-    else (
-      match port with 
-        | OP.Port.Port(port) -> 
-            if Hashtbl.mem st.int_ports port then(
-              let out_p = (!( Hashtbl.find st.int_ports port))  in
-(*               Printf.printf "Outputing packet to port %s\n" out_p.port_name;
- *               *)
-                Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
-(*
-                out_p.counter.Entry.tx_packets <- Int64.add
-                                                    out_p.counter.Entry.tx_packets 1L;
-                out_p.counter.Entry.tx_bytes <- Int64.add
-                                                  out_p.counter.Entry.tx_bytes
-                                                  (Int64.of_int ((Bitstring.bitstring_length frame)/8));
- *)
-                return ())
-            else
-              return (Printf.printf "Port %d not registered \n" port)
-        | OP.Port.No_port -> return ()
-        | OP.Port.Flood |OP.Port.All ->
-            return (Hashtbl.iter 
-                      (fun port_id port -> 
-                         if(port_id != (OP.Port.int_of_port in_port)) then (
-                           (!port).counter.Entry.tx_packets <- 
-                             Int64.add(!port).counter.Entry.tx_packets 1L;
-                           (!port).counter.Entry.tx_bytes <- 
-                             Int64.add (!port).counter.Entry.tx_bytes
-                               (Int64.of_int ((Bitstring.bitstring_length frame)/8));                           
-                           resolve(Net.Manager.send_raw (!port).mgr (!port).port_name
-                                     [frame]))
-                         else (
-                                      (* Printf.printf "Not sending packet on %d %d\n%!" port_id
-                                       (OP.Port.int_of_port in_port);
-                                       *)
-                           ())
-                      ) st.int_ports)
-        | OP.Port.In_port ->
-            let port = (OP.Port.int_of_port in_port) in 
-              if Hashtbl.mem st.int_ports port then
-                let out_p = (!(Hashtbl.find st.int_ports port))  in
-                  out_p.counter.Entry.tx_packets <- 
-                    Int64.add out_p.counter.Entry.tx_packets 1L;
-                  out_p.counter.Entry.tx_bytes <- 
-                    Int64.add out_p.counter.Entry.tx_bytes
-                      (Int64.of_int ((Bitstring.bitstring_length frame)/8)); 
-                  (Net.Manager.send_raw out_p.mgr out_p.port_name [frame];
-                   return ())
-                  else
-                    return (Printf.printf "Port %d not registered \n" port)
+  let update_port_rx_stats pkt_len port = 
+    port.counter.OP.Port.rx_packets <- (Int64.add 
+      port.counter.OP.Port.rx_packets 1L);
+    port.counter.OP.Port.rx_bytes <- (Int64.add 
+      port.counter.OP.Port.rx_bytes pkt_len)
+
+  let forward_frame st in_port frame pkt_size = function
+    | OP.Port.Port(port) -> 
+      if Hashtbl.mem st.int_to_port port then(
+        let out_p = (!( Hashtbl.find st.int_to_port port))  in
+          OS.Netif.write out_p.ethif frame )
+      else
+        return (Printf.printf "Port %d not registered \n" port)
+    | OP.Port.No_port -> return ()
+    | OP.Port.Flood 
+    |OP.Port.All ->
+      Lwt_list.iter_p  
+      (fun port -> 
+        if(port.port_id != (OP.Port.int_of_port in_port)) then (
+          update_port_tx_stats (Int64.of_int (Cstruct.len frame)) port;
+          OS.Netif.write port.ethif frame
+        ) else
+          return ()
+      ) st.ports
+    | OP.Port.In_port ->
+      let port = (OP.Port.int_of_port in_port) in 
+      if Hashtbl.mem st.int_to_port port then
+        let out_p = !(Hashtbl.find st.int_to_port port) in
+          update_port_tx_stats (Int64.of_int (Cstruct.len frame)) out_p;
+          OS.Netif.write out_p.ethif frame
+      else
+        return (Printf.printf "Port %d not registered \n" port)
         (*           | Table
          *           | Normal
          *           | Controller -> generate a packet out. 
          *           | Local -> can I inject this frame to the network
          *           stack?  *)
         | _ -> return (Printf.printf "Not implemented output port\n")
-    )
 
-  let rec set_frame_bits frame start len bits = 
-    match len with 
-        (*TODO: Make the pattern match more accurate, read the match syntax*)
-      | 0 -> return ()
-      | len ->
-        Bitstring.put frame (start + len - 1) (Bitstring.get bits (len - 1));
-        set_frame_bits frame start (len-1) bits
+  cstruct dl_header {
+    uint8_t   dl_dst[6];
+    uint8_t   dl_src[6]; 
+    uint16_t  dl_type 
+  } as big_endian
 
-  type pkt_header = 
-    {
-      mutable dl_dst : string;
-      mutable dl_src : string;
-      dl_type : int;
-      mutable dl_vlan : int;
-      mutable dl_vlan_pcp : char;
-      ihl : char;
-      mutable tos : char;
-      ip_hdr_1 : int64;
-      mutable nw_type : char;
-      ip_hdr_2 : int;
-      mutable nw_src : int32;
-      mutable nw_dst : int32;
-      ip_opt : Bitstring.t;
-      tp_src : int;
-      tp_dst : int;
-      data : Bitstring.t;
-    }
+  cstruct arphdr {
+    uint16_t ar_hrd;         
+    uint16_t ar_pro;         
+    uint16_t ar_hln;              
+    uint16_t ar_pln;              
+    uint16_t ar_op;          
+    uint8_t ar_sha[6];  
+    uint32_t nw_src;
+    uint8_t ar_tha[6];  
+    uint32_t nw_dst 
+  } as big_endian
 
-  let pkt_hdr_of_bitstring bits = 
-    bitmatch bits with
-      (* TODO: add 802.11q case *)
-      (* TCP *)
-      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
-         ip_hdr_1:56; 6:8; ip_hdr_2:16; nw_src:32; nw_dst:32;
-         ip_opt:(ihl-5)*32:bitstring; tp_src:16; tp_dst:16; data:-1:bitstring}
-      -> { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); 
-           dl_vlan=0xffff; dl_vlan_pcp='\x01'; tos=(char_of_int tos); 
-           ip_hdr_1; nw_type='\x06'; ip_hdr_2; nw_src; nw_dst; ip_opt; 
-           tp_src; tp_dst; data; }
-      (* ICMP *)
-      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
-         ip_hdr_1:56; 1:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
-         ip_opt:(ihl-5)*32:bitstring; tp_src:16:littleendian; data:-1:bitstring} ->
-         { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); dl_vlan=0xffff; 
-           dl_vlan_pcp='\x01'; tos=(char_of_int tos); ip_hdr_1; nw_type='\x01'; 
-           ip_hdr_2; nw_src; nw_dst; ip_opt; tp_src; tp_dst=0; data; }
-        
-      (* UDP *)
-      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
-         ip_hdr_1:56; 17:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
-         ip_opt:(ihl-5)*32:bitstring; tp_src:16; tp_dst:16; 
-         data:-1:bitstring } 
-        -> { dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl);
-        dl_vlan=0xffff; dl_vlan_pcp='\x01';
-          tos=(char_of_int tos); ip_hdr_1; nw_type='\x11'; ip_hdr_2; 
-          nw_src; nw_dst; ip_opt; tp_src; tp_dst; data; }
-        
-      (* IP *)
-      | {dl_dst:48:string; dl_src:48:string; 0x0800:16; 4:4; ihl:4; tos:8; 
-         ip_hdr_1:56; nw_type:8; ip_hdr_2:16; nw_src:32; nw_dst:32; 
-         data:-1:bitstring } 
-        -> {  dl_dst; dl_src; dl_type=0x0800; ihl=(char_of_int ihl); 
-              dl_vlan=0xffff; dl_vlan_pcp='\x01'; tos=(char_of_int tos); 
-              ip_hdr_1; nw_type=(char_of_int nw_type); ip_hdr_2; nw_src; nw_dst; 
-              ip_opt=(Bitstring.empty_bitstring); tp_src=0; tp_dst=0; data; }
-         
-      (* Ethernet only *)
-      | {dl_dst:48:string; dl_src:48:string; dl_type:16; data:-1:bitstring}
-        -> { dl_dst; dl_src; dl_type; ihl='\x00'; dl_vlan=0xffff; dl_vlan_pcp='\x01';
-              tos='\x00'; ip_hdr_1=0L; nw_type='\x00'; 
-              ip_hdr_2=0; nw_src=0l; nw_dst=0l; 
-              ip_opt=(Bitstring.empty_bitstring); tp_src=0; tp_dst=0; data; }
-  let bitstring_of_pkt_hdr pkt_hdr = 
-    match (pkt_hdr.dl_type, pkt_hdr.nw_type) with
-    | (0x0800, '\x06')
-    | (0x0800, '\x17') ->
-      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
-      pkt_hdr.dl_type:16; 
-       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
-       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
-       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
-       pkt_hdr.ip_opt:-1:bitstring; pkt_hdr.tp_src:16; pkt_hdr.tp_dst:16; 
-       pkt_hdr.data:-1:bitstring}
-    | (0x0800, '\x01') ->
-      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
-      pkt_hdr.dl_type:16; 
-       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
-       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
-       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
-       pkt_hdr.ip_opt:-1:bitstring; pkt_hdr.tp_src:16; pkt_hdr.data:-1:bitstring}
-    | (0x0800, _) ->
-      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
-      pkt_hdr.dl_type:16; 
-       4:4; (int_of_char pkt_hdr.ihl):4; (int_of_char pkt_hdr.tos):8; 
-       pkt_hdr.ip_hdr_1:56; (int_of_char pkt_hdr.nw_type):8; 
-       pkt_hdr.ip_hdr_2:16; pkt_hdr.nw_src:32; pkt_hdr.nw_dst:32;
-       pkt_hdr.data:-1:bitstring}
-    | (_, _) ->
-      BITSTRING{pkt_hdr.dl_dst:48:string; pkt_hdr.dl_src:48:string; 
-      pkt_hdr.dl_type:16; pkt_hdr.data:-1:bitstring}
+  cstruct nw_header {
+    uint8_t        hlen_version;
+    uint8_t        nw_tos;
+    uint8_t        pad[7];
+    uint8_t        nw_proto; 
+    uint16_t       csum;
+    uint32_t       nw_src; 
+    uint32_t       nw_dst
+  } as big_endian 
+
+  cstruct tp_header {
+    uint16_t tp_src;
+    uint16_t tp_dst
+  } as big_endian 
+
+  cstruct icmphdr {
+    uint8_t typ;
+    uint8_t code;
+    uint16_t checksum
+  } as big_endian
 
 
-        (* Assumwe that action are valid. I will not get a flow that sets an ip
-         * address unless it defines that the ethType is ip. Need to enforce
-         * these rule in the parsing process of the flow_mod packets *)
-  let rec apply_of_actions st in_port actions frame =
-    let modified = ref false in 
-    let m = ref None in 
-    let get_pkt_hdr frame = 
-      match !m with
-      | None -> let tupple = pkt_hdr_of_bitstring frame in 
-                  m := Some(tupple);
-                  tupple
-      |  Some(m) -> m
+  (* Assumwe that action are valid. I will not get a flow that sets an ip
+   * address unless it defines that the ethType is ip. Need to enforce
+   * these rule in the parsing process of the flow_mod packets *)
+  let apply_of_actions st in_port bits actions =
+    let apply_of_actions_inner st in_port bits = function
+      | OP.Flow.Output (port, pkt_size) ->
+        (* Make a packet copy in case the buffer is modified and multiple
+         * outputs are defined? *)
+        forward_frame st in_port bits pkt_size port
+      | OP.Flow.Set_dl_src(eaddr) ->
+        return (set_dl_header_dl_src eaddr 6 bits)
+      | OP.Flow.Set_dl_dst(eaddr) ->
+        return (set_dl_header_dl_dst eaddr 6 bits)
+        (* TODO: Add for this actions to check when inserted if 
+          * the flow is an ip flow *)
+      | OP.Flow.Set_nw_tos(tos) -> 
+        let ip_data = Cstruct.shift bits sizeof_dl_header in
+          return (set_nw_header_nw_tos ip_data (int_of_char tos))
+      (* TODO: wHAT ABOUT ARP?
+       * *)
+      | OP.Flow.Set_nw_src(ip) -> 
+        let ip_data = Cstruct.shift bits sizeof_dl_header in
+          return (set_nw_header_nw_src ip_data ip)
+      | OP.Flow.Set_nw_dst(ip) -> 
+        let ip_data = Cstruct.shift bits sizeof_dl_header in
+          return (set_nw_header_nw_dst ip_data ip)
+      | OP.Flow.Set_tp_src(port) ->
+        let ip_data = Cstruct.shift bits sizeof_dl_header in
+        let len = (get_nw_header_hlen_version bits) land 0xf in 
+        let tp_data = Cstruct.shift ip_data (len*4) in 
+          return (set_tp_header_tp_src tp_data port)
+      | OP.Flow.Set_tp_dst(port) ->
+        let ip_data = Cstruct.shift bits sizeof_dl_header in
+        let len = (get_nw_header_hlen_version bits) land 0xf in 
+        let tp_data = Cstruct.shift ip_data (len*4) in 
+          return (set_tp_header_tp_dst tp_data port )
+      | OP.Flow.Enqueue(_, _)
+      | OP.Flow.Set_vlan_pcp _
+      | OP.Flow.Set_vlan_vid _
+      | OP.Flow.VENDOR_ACT 
+      | OP.Flow.STRIP_VLAN ->
+        (* VLAN manupulation actions *)
+        return (pr "Unsupported action STRIP_VLAN\n")
     in
-      
-    match actions with 
+    let rec apply_of_actions_rec st in_port actions = function
       | [] -> return ()
-      | head :: actions ->
-        match head with
-          | OP.Flow.Output (port, pkt_size) ->(
-            let m = (get_pkt_hdr frame) in 
-            let frame = if (!modified) then 
-                bitstring_of_pkt_hdr m 
-            else 
-              frame 
-            in
-              forward_frame st in_port port frame pkt_size; 
-              apply_of_actions st in_port actions frame)
-          | OP.Flow.Set_dl_src(eaddr) ->
-             (* Printf.printf "setting src mac addr to %s\n" (OP.eaddr_to_string
-              * eaddr); *)
-(*                set_frame_bits frame 48 48 (OP.bitstring_of_eaddr eaddr);  *)
-(*
-               (get_pkt_hdr frame).dl_src <- eaddr;
-              modified := true;
-*)
-              apply_of_actions st in_port actions frame
-          | OP.Flow.Set_dl_dst(eaddr) ->
-(*                set_frame_bits frame 0 48 (OP.bitstring_of_eaddr eaddr);  *)
-(*
-              let frame = 
-                    bitmatch frame with
-                    | {_:48;data:-1:bitstring} ->
-                      BITSTRING{eaddr:48:string;data:-1:bitstring}
-              in
- *)
-              let (pkt, _, _) = frame in 
-              let _ =  String.blit eaddr 0 pkt 0 6 in
-(*
-              (get_pkt_hdr frame).dl_dst <- eaddr;
-              modified := true;
- *)
-              apply_of_actions st in_port actions frame 
-          | OP.Flow.Set_nw_tos(tos) ->
-              set_frame_bits frame 160 8 (BITSTRING{(int_of_char tos):8}); 
-              apply_of_actions st in_port actions frame           
-          | OP.Flow.Set_nw_src(ip) ->
-              set_frame_bits frame 208 32 (BITSTRING{ip:32});  
-              apply_of_actions st in_port actions frame
-          | OP.Flow.Set_nw_dst(ip) ->
-(*               set_frame_bits frame 240 32 (BITSTRING{ip:32});   *)
-              let (pkt, _, _) = frame in  
-                let ret = String.create 4 in 
-                   String.set ret 0 
-                     (char_of_int
-                        (Int32.to_int (Int32.shift_left (Int32.logand ip 0xff000000l) 24)));
-                   String.set ret 1 
-                     (char_of_int
-                        (Int32.to_int (Int32.shift_left (Int32.logand ip 0xff0000l) 16)));
-                   String.set ret 2
-                     (char_of_int
-                        (Int32.to_int (Int32.shift_left (Int32.logand ip 0xff00l) 8)));
-                   String.set ret 3 
-                     (char_of_int (Int32.to_int (Int32.logand ip 0xffl)));
-(*               (get_pkt_hdr frame).nw_dst <- ip; *)
-              let _ =  String.blit ret 0 pkt 30 4 in
-(*               modified := true; *)
-(*
-              let frame = 
-                    bitmatch frame with
-                    | {head:240:bitstring;_:32:bitstring; data:-1:bitstring} ->
-                      BITSTRING{head:240:bitstring; ip:32;
-                      data:-1:bitstring}
-              in
- *)
-              apply_of_actions st in_port actions frame                   
-          | OP.Flow.Set_tp_src(port) ->
-                (bitmatch frame with 
-                  {ip_len:4:offset(116)} -> 
-                      set_frame_bits frame (14*8 + (ip_len*32)) 16 (BITSTRING{port:16});
-                      apply_of_actions st in_port actions frame)
-          | OP.Flow.Set_tp_dst(port) ->
-                (bitmatch frame with 
-                  {ip_len:4:offset(116)} ->
-                      set_frame_bits frame (14*8 + (ip_len*32) + 16) 16 (BITSTRING{port:16});
-                      apply_of_actions st in_port actions frame
-                      )
-          | _ ->
-              (Printf.printf "Unsupported action %s\n" (OP.Flow.string_of_action
-              head));
-              apply_of_actions st in_port actions frame
+      | head :: actions -> 
+        let _ = apply_of_actions_inner st in_port bits head in
+          apply_of_actions_rec st in_port bits actions 
+    in 
+      apply_of_actions_rec st in_port bits actions
+
 
    let errornum = ref 1 
    let lookup_flow st of_match =
-       (* Check first the match table cache *)
-        if (Hashtbl.mem st.table.Table.cache of_match ) then (
-            let entry = (Hashtbl.find st.table.Table.cache of_match) in
-                Found(entry) 
-        ) else (
-        (* Check the wilcard card table *)
-            let ret_lst = ref [] in 
-            let lookup_flow flow entry =
-                if (OP.Match.flow_match_compare of_match flow
-                flow.OP.Match.wildcards) then (
-(*
-                    Printf.printf "Found flow %s in cache \n%!"
-                    (OP.Match.match_to_string of_match);
-*)
-                    ret_lst := (!ret_lst) @ [entry]
-                )
-            in
-                Hashtbl.iter lookup_flow st.table.Table.entries;
-                if (List.length (!ret_lst) == 0) then 
-                    NOT_FOUND
-                else ( 
-(*
-                    Printf.printf "Found flow %s in table\n%!"
-                    (OP.Match.match_to_string of_match);
-*)
-                    let flow_ref = (List.hd (!ret_lst)) in 
-                    Hashtbl.add st.table.Table.cache of_match flow_ref;
-                    Found(flow_ref)
-                )
-      )
+     (* Check first the match table cache *)
+     if (Hashtbl.mem st.table.Table.cache of_match ) then (
+       let entry = (Hashtbl.find st.table.Table.cache of_match) in
+       Found(entry) 
+     ) else (
+       (* Check the wilcard card table *)
+       let lookup_flow flow entry ret =
+         if (OP.Match.flow_match_compare of_match flow
+                flow.OP.Match.wildcards) then
+           ret @ [flow]
+         else
+           ret
+       in
+       let matches = Hashtbl.fold lookup_flow st.table.Table.entries [] in
+       if ((List.length matches) = 0) then 
+         NOT_FOUND
+         else (
+           (* TODO choose highest priority on the list instead of picking the 
+            * first entry *)
+           let flow_ref = Hashtbl.find st.table.Table.entries
+                            (List.hd matches) in 
+           Hashtbl.add st.table.Table.cache of_match (ref flow_ref);
+           Found((ref flow_ref))
+           )
+         )
 end
 
 let st = 
-  let (packet_queue, push_packet) = Lwt_stream.create () in 
+  let (packet_queue, push_packet) = Lwt_stream.create () in
+  let capabilities = OP.Switch.(
+    { flow_stats=true; table_stats=true; port_stats=true; stp=true; 
+    ip_reasm=false; queue_stats=false; arp_match_ip=true; }) in 
+  let actions = OP.Switch.({
+    output=true; set_vlan_id=true; set_vlan_pcp=true; strip_vlan=true;
+    set_dl_src=true; set_dl_dst=true; set_nw_src=true; set_nw_dst=true;
+    set_nw_tos=true; set_tp_src=true; set_tp_dst=true; enqueue=true;
+    vendor=true; }) in 
+  let features = OP.Switch.(
+    {datapath_id=1L; n_buffers=0l; n_tables=(char_of_int 1); 
+    capabilities; actions; ports=[];}) in
   Switch.(
-  { ports = (Hashtbl.create 0); int_ports = (Hashtbl.create 0);
-  table = Table.({ tid = 0_L; 
-                   entries = (Hashtbl.create 10000); 
-                   cache = (Hashtbl.create 10000); 
-        missed = 0L; lookup=0L;});
-    stats = { n_frags=0_L; n_hits=0_L; n_missed=0_L; n_lost=0_L };
-    p_sflow = 0_l; controllers=[]; port_feat = []; errornum = 0l;
-    portnum=0; packet_queue; push_packet; queue_len = 0;
-  })
+    { ports = []; int_to_port = (Hashtbl.create 0);
+    dev_to_port=(Hashtbl.create 64); 
+    table = Table.(
+      { tid = 0_L; entries = (Hashtbl.create 10000); cache = (Hashtbl.create 10000);
+        stats = OP.Stats.(
+          {table_id=(OP.Stats.table_id_of_int 1); name="main_tbl"; 
+          wildcards=OP.Wildcards.exact_match; max_entries=1024l; active_count=0l; 
+          lookup_count=0L; matched_count=0L});});
+      p_sflow = 0_l; controllers=[]; errornum = 0l;
+      portnum=0; packet_queue; push_packet; queue_len = 0;
+      stats={n_frags=0L; n_hits=0L;n_missed=0L;n_lost=0L;}; features; })
 
 let add_flow tuple actions =
-(*     Printf.printf "adding flow %s %s\n%!" (OP.Match.match_to_string tuple)
- *     (OP.Flow.string_of_actions actions); *)
-(*   if (Hashtbl.mem st.Switch.table.Table.entries tuple) then ( 
-(*
-     Printf.printf "Tuple already exists\n%! %s" (OP.Match.match_to_string
-     tuple);
-*)
-
-     ())
-  else
- *)
+  (* TODO check if the details are correct e.g. IP type etc. *)
   Hashtbl.replace st.Switch.table.Table.entries tuple
-  (ref Entry.({actions; counters=(init_flow_counters ())}))
+  (Entry.({actions; counters=(init_flow_counters ()); cache_entries=[];}))
 
 let del_flow tuple out_port =
-(*     Printf.printf "delete flow %s\n%!" (OP.Match.match_to_string tuple); *)
-   
-(*     let remove_match = ref []  in  *)
-    let remove_flow_ref = ref [] in  
-    (* Delete all matching entries from the flow table*)
-    Hashtbl.iter (fun of_match flow -> 
+  (* Delete all matching entries from the flow table*)
+  let remove_flow = 
+    Hashtbl.fold (
+      fun of_match flow ret -> 
         if (OP.Match.flow_match_compare of_match tuple
-              tuple.OP.Match.wildcards) then ( 
-                Hashtbl.remove st.Switch.table.Table.entries of_match; 
-                (remove_flow_ref := ((!remove_flow_ref) @ [flow])))
-        else ()) st.Switch.table.Table.entries;
-        
-        (* Delete all entries from cache *)
-        Hashtbl.iter (fun of_match flow -> 
-            if(List.mem flow (!remove_flow_ref) ) then (
-                Hashtbl.remove st.Switch.table.Table.cache of_match)
-            ) st.Switch.table.Table.cache
+        tuple.OP.Match.wildcards) then ( 
+          Hashtbl.remove st.Switch.table.Table.entries of_match; 
+          ret @ [flow]
+        ) else 
+          ret
+    ) st.Switch.table.Table.entries [] in
 
-(*     Hashtbl.add st.Switch.table.Table.entries tuple (ref Entry.({actions;
- *     counters=(init_flow_counters ())})) *)
+  (* Delete all entries from cache *)
+  Hashtbl.iter (fun of_match flow -> 
+    if (List.mem (!flow) remove_flow ) then 
+      Hashtbl.remove st.Switch.table.Table.cache of_match
+    ) st.Switch.table.Table.cache
 
 let pkt_count = ref 0L
 let process_frame intf_name frame = 
-  (* roughly,
-   * + examine frame
-   * + extract OF headers
-   * + match against st.table
-   *   + if match, update counters, execute actions
-   *   + else, forward to controller/drop, depending on config
-   *)
-(*   Printf.printf "Packet received by switch on port %s\n%!" intf_name; *)
-(*
-  pkt_count := (Int64.add !pkt_count 1L);
-  let _ = 
-    if ((Int64.rem !pkt_count 1000L) = 0L) then
-      Printf.printf "%Ld packets rcv\n%!" !pkt_count
-  in
-*)
-    if ((Hashtbl.mem st.Switch.ports intf_name) 
+    if ((Hashtbl.mem st.Switch.dev_to_port intf_name) 
         && (st.Switch.queue_len < 256)) then (
 (*       let p = (!(Hashtbl.find st.Switch.ports intf_name)) in *)
 (*       let in_port = (OP.Port.port_of_int p.Switch.port_id) in *)
@@ -562,68 +403,37 @@ let process_frame intf_name frame =
       return ()
     )
 
-(* return () 
+(* 
  * let process_frame_depr intf_name frame =  *)
 let process_frame_inner intf_name frame =
-   if (Hashtbl.mem st.Switch.ports intf_name ) then 
-     let p = (!(Hashtbl.find st.Switch.ports intf_name)) in 
-  pkt_count := (Int64.add !pkt_count 1L);
-(*
-  let _ = 
-    if ((Int64.rem !pkt_count 1000L) = 0L) then
-      Printf.printf "%Ld packets rcv\n%!" !pkt_count
-  in     
- *)
-  let in_port = (OP.Port.port_of_int p.Switch.port_id) in (* Hashtbl.find
- *     in *) 
-    let tupple = (OP.Match.parse_from_raw_packet in_port frame ) in
-    (* Update port rx statistics *)
-    p.Switch.counter.Entry.rx_packets <- 
-      (Int64.add p.Switch.counter.Entry.rx_packets 1L); 
-    p.Switch.counter.Entry.rx_bytes <- 
-      (Int64.add p.Switch.counter.Entry.rx_bytes 
-      (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
+  try_lwt 
+     let p = (!(Hashtbl.find st.Switch.dev_to_port intf_name)) in 
+     pkt_count := (Int64.add !pkt_count 1L);
+     let in_port = (OP.Port.port_of_int p.Switch.port_id) in 
+     let tupple = (OP.Match.raw_packet_to_match in_port frame ) in
+     (* Update port rx statistics *)
+     let _ = Switch.update_port_rx_stats (Int64.of_int (Cstruct.len frame)) p in
 
-    (* Lookup packet flow to existing flows in table *)
-    let entry = (Switch.lookup_flow st tupple) in 
-    match entry with 
-    | Switch.NOT_FOUND ->
-(*             Printf.printf "Non entry found for match %s\n%!"
- *             (OP.Match.match_to_string tupple); *)
-            st.Switch.table.Table.missed <- 
-              (Int64.add st.Switch.table.Table.missed 1L);
-
-(*            let addr = "\x11\x11\x11\x11\x11\x11" in 
-            add_flow tupple [(OP.Flow.Set_dl_src (addr));
-            (OP.Flow.Set_dl_dst (addr));
-            (OP.Flow.Set_nw_dst (0xa0a0a0al));
-            (OP.Flow.Set_tp_src (1010));
-            (OP.Flow.Set_tp_dst (1010));
-            (OP.Flow.Output ((OP.Port.port_of_int 2),  2000)) ; ];
- *)
-(*
-             add_flow tupple [(OP.Flow.Output ((OP.Port.port_of_int 2),
-             2000)) ; ]; 
-*)
-            let pkt_in = (OP.Packet_in.bitstring_of_pkt_in ~port:in_port
-            ~reason:OP.Packet_in.NO_MATCH ~bits:frame ()) in 
-            return (List.iter (fun t -> (Channel.write_bitstring t pkt_in) >>
-            Channel.flush t; ()) st.Switch.controllers)
-                (* generate a packet in event *)
-    | Switch.Found(entry) ->
-            st.Switch.table.Table.lookup <- 
-              (Int64.add st.Switch.table.Table.lookup 1L);
-            (!entry).Entry.counters.Entry.n_packets <- 
-              (Int64.add (!entry).Entry.counters.Entry.n_packets 1L);
-            (!entry).Entry.counters.Entry.n_bytes <- 
-              (Int64.add (!entry).Entry.counters.Entry.n_bytes  
-                (Int64.of_int ((Bitstring.bitstring_length frame)/8)));
-            (!entry).Entry.counters.Entry.last_secs = (Int32.of_float (OS.Clock.time ()));
-            Switch.apply_of_actions st tupple.OP.Match.in_port 
-              (!entry).Entry.actions frame
-
-  else
-      return (Printf.printf "Port %s not found\n%!" intf_name) 
+     (* Lookup packet flow to existing flows in table *)
+     let entry = (Switch.lookup_flow st tupple) in 
+     match entry with 
+     | Switch.NOT_FOUND ->
+       let _ = Table.update_table_missed st.Switch.table in
+       let bits = OP.marshal_and_sub (OP.Packet_in.marshal_pkt_in  ~port:in_port
+       ~reason:OP.Packet_in.NO_MATCH frame) (OS.Io_page.get ()) in 
+       Lwt_list.iter_s 
+       (fun t -> 
+         let _ = Channel.write_buffer t bits in 
+          Channel.flush t)
+       st.Switch.controllers
+       (* generate a packet in event *)
+     | Switch.Found(entry) ->
+       let _ = Table.update_table_found st.Switch.table in
+       let _ = Entry.update_flow (Int64.of_int (Cstruct.len frame)) !entry in
+        Switch.apply_of_actions st tupple.OP.Match.in_port 
+          frame (!entry).Entry.actions
+    with Not_found ->
+      return (pr "Port %s not found\n%!" intf_name) 
 
 let proccess_packets () = 
   try_lwt 
@@ -636,242 +446,286 @@ let proccess_packets () =
     | None -> return ()
   done
 
-let add_port sw mgr intf = 
-  Net.Manager.intercept intf process_frame_inner;
+let add_port sw mgr ethif = 
   st.Switch.portnum <- st.Switch.portnum + 1;
-  Printf.printf "Adding port %d (%s)\n %!" st.Switch.portnum
-  (Net.Manager.get_intf intf); 
-  let port =  (ref Switch.({port_id= st.Switch.portnum; mgr=mgr; 
-                       port_name=(Net.Manager.get_intf intf);
-                        counter=(Entry.init_port_counters ())})) in  
-    Hashtbl.add sw.Switch.int_ports st.Switch.portnum port; 
-    Hashtbl.add sw.Switch.ports (!port).Switch.port_name port;
-    sw.Switch.port_feat <- sw.Switch.port_feat @ 
-    [(OP.Port.init_port_phy ~port_no:st.Switch.portnum ~name:((!port).Switch.port_name) () )]
-
-let process_openflow st =
-  (* this is processing from a Channel, so roughly
-   * + read OpenFlow message off Channel,
-   * + match message and handle accordingly, possibly emitting one or more
-   *   messages as a result
-   *)
-
-  return ()
+  Printf.printf "Adding port %d (%s)\n %!" st.Switch.portnum ethif.OS.Netif.id;
+  let features = OP.Port.({pause_asym=true; pause=true; autoneg=true; fiber=true;
+        copper=true; f_10GB_FD=true; f_1GB_FD=true; f_1GB_HD=true; f_100MB_FD=true;
+        f_100MB_HD=true; f_10MB_FD=true; f_10MB_HD=true;}) in
+  let phy= OP.Port.({port_no=(st.Switch.portnum); hw_addr=(ethif.OS.Netif.mac);
+        name=ethif.OS.Netif.id; 
+        config = 
+          { port_down=false; no_stp=false; no_recv=false; no_recv_stp=false; 
+          no_flood=false; no_fwd=false; no_packet_in=false;};
+        state= 
+          {link_down =false; stp_listen =false; stp_learn =false;
+          stp_forward =false; stp_block =false;};
+        curr=features; advertised=features; supported=features; 
+        peer=features;}) in
+  let port =  Switch.(
+      {port_id= st.Switch.portnum; mgr; port_name=ethif.OS.Netif.id;
+      counter=(Switch.init_port_counters st.Switch.portnum); ethif;}) in  
+  sw.Switch.ports <- sw.Switch.ports @ [port];
+    Hashtbl.add sw.Switch.int_to_port st.Switch.portnum (ref port); 
+    Hashtbl.add sw.Switch.dev_to_port ethif.OS.Netif.id (ref port);
+    sw.Switch.features.OP.Switch.ports  <- 
+      sw.Switch.features.OP.Switch.ports @ [phy]
 
 type endhost = {
   ip: Nettypes.ipv4_addr;
   port: int;
 }
 
-let process_of_packet state ofp t = 
-    (* let ep = { ip=remote_addr; port=remote_port } in *)
-    match ofp with
-      | OP.Hello (h, _) (* Reply to HELLO with a HELLO and a feature request *)
-        -> (cp "HELLO";
-            Channel.write_bitstring t (OP.Header.build_h h) 
-            >> Channel.write_bitstring t (OP.build_features_req 0_l) 
-            >> Channel.flush t)
-      | OP.Echo_req (h, bs)  (* Reply to ECHO requests *)
-        -> (cp "ECHO_REQ";
-            Channel.write_bitstring t (OP.build_echo_resp h bs)
-            >> Channel.flush t)
-      | OP.Features_req (h)  
-      -> (cp "FEAT_REQ";
-          Channel.write_bitstring t 
-           (OP.Switch.gen_reply_features h Int64.one st.Switch.port_feat)
-           >> Channel.flush t)
-      | OP.Stats_req(h, req) 
-        -> (
-            let xid = h.OP.Header.xid in 
-            cp "STATS_REQ\n%!";
-          ( match req with
-            | OP.Stats.Desc_req(req) ->
-                let desc = "Mirage" in 
-                let resp_h = (OP.Header.create OP.Header.STATS_RESP 
-                  (OP.Header.get_len+  4 + 256 + 256 + 256 + 32 + 256) 
-                  h.OP.Header.xid) in 
-                let desc_data = BITSTRING{ (OP.Header.build_h resp_h):OP.Header.get_len*8:bitstring; 0:16; 0:16;
-                  (Printf.sprintf "%s%s" desc (String.make (256-(String.length desc)) (Char.chr 0))):256*8:string;
-                  (Printf.sprintf "%s%s" desc (String.make (256-(String.length desc)) (Char.chr 0))):256*8:string;
-                  (Printf.sprintf "%s%s" desc (String.make (256-(String.length desc)) (Char.chr 0))):256*8:string;
-                  (Printf.sprintf "%s%s" "0.1" (String.make 29 (Char.chr 0))):32*8:string;
-                  (Printf.sprintf "%s%s" desc (String.make (256-(String.length desc)) (Char.chr 0))):256*8:string } in
-                Channel.write_bitstring t desc_data >>
-                Channel.flush t 
-            | OP.Stats.Flow_req(req_h, of_match, table_id, out_port) ->
-                let flow_lst_resp = ref ([(BITSTRING{1:16; 0:16})]) in
-                let flow_lst_len = ref 32 in 
-                let match_flows of_match key value =
-                    if (OP.Match.flow_match_compare key of_match of_match.OP.Match.wildcards) then (
-                        let actions = (OP.Flow.bitstring_of_actions value.Entry.actions) in 
-                        let flow = (BITSTRING{(
-                            2+1+1+(OP.Match.get_len)+4+4+2+2+2+6+8+8+8+0+((Bitstring.bitstring_length actions)/8)):16; 
-                            1:8; 0:8; 
-                            (OP.Match.match_to_bitstring key):OP.Match.get_len*8:bitstring;
-                            (Int32.sub (Int32.of_float (OS.Clock.time()))
-                            value.Entry.counters.Entry.insert_secs):32; 
-                            0l:32; (*Make this more accurate *)
-                            value.Entry.counters.Entry.idle_timeout:16; 
-                            value.Entry.counters.Entry.hard_timeout:16; 
-                            value.Entry.counters.Entry.priority:16; 
-                            0L:48; 
-                            value.Entry.counters.Entry.cookie:64; 
-                            value.Entry.counters.Entry.n_packets:64;
-                            value.Entry.counters.Entry.n_bytes:64; 
-                            actions:(Bitstring.bitstring_length actions):bitstring}) in
-                        flow_lst_len := (!flow_lst_len) + (Bitstring.bitstring_length flow);
-                        flow_lst_resp := (!flow_lst_resp) @ [flow]
-                    )
-                in
-                    Hashtbl.iter (fun key value -> match_flows of_match key (!value)) st.Switch.table.Table.entries;
-                    let resp_h = (OP.Header.create OP.Header.STATS_RESP (OP.Header.get_len + ((!flow_lst_len)/8)) 
-                        h.OP.Header.xid) in
-                    let desc_data = (Bitstring.concat ([(OP.Header.build_h resp_h)] @ (!flow_lst_resp))) in 
-                    Channel.write_bitstring t desc_data >>  
-                    Channel.flush t
-            | OP.Stats.Aggregate_req (req_h, of_match, table, port) -> 
-                let aggr_flow_bytes = ref 0L in
-                let aggr_flow_pkts = ref 0L in
-                let aggr_flows = ref 0l in
-                
-                let match_flows_aggr of_match key value =
-                     if (OP.Match.flow_match_compare key of_match of_match.OP.Match.wildcards) then (
-                         aggr_flows := Int32.add (!aggr_flows) 1l ;
-                         aggr_flow_bytes := Int64.add (!aggr_flow_bytes) 
-                         value.Entry.counters.Entry.n_bytes; 
-                         aggr_flow_pkts := Int64.add (!aggr_flow_pkts)
+let process_openflow  state t bits =  function
+  | OP.Hello (h) -> 
+    (* Reply to HELLO with a HELLO and a feature request *)
+    cp "HELLO";
+    let bits = OP.marshal_and_sub (OP.Header.marshal_header h)
+      (OS.Io_page.get ()) in 
+    let _ = Channel.write_buffer t bits in 
+(*     (OP.build_features_req 0_l)  *)
+      Channel.flush t
+  | OP.Echo_req (h, bs) -> (* Reply to ECHO requests *)
+    cp "ECHO_REQ";
+    let h = OP.Header.(create ECHO_RESP sizeof_ofp_header h.xid) in
+    let bits = OP.marshal_and_sub (OP.Header.marshal_header h)
+      (OS.Io_page.get ()) in 
+    let _ = Channel.write_buffer t bits in 
+      Channel.flush t
+  | OP.Features_req (h)  -> 
+    cp "FEAT_REQ";
+    let bits = OP.marshal_and_sub
+      (OP.Switch.marshal_reply_features h.OP.Header.xid st.Switch.features )
+      (OS.Io_page.get ()) in 
+    let _ = Channel.write_buffer  t bits in
+      Channel.flush t
+  | OP.Stats_req(h, req) -> begin
+    let xid = h.OP.Header.xid in 
+    cp "STATS_REQ\n%!";
+    match req with
+    | OP.Stats.Desc_req(req) ->
+      let desc = OP.Stats.({ imfr_desc="Mirage"; hw_desc="Mirage";
+                  sw_desc="Mirage"; serial_num="0.1";dp_desc="Mirage";}) 
+      in  
+      let resp_h = OP.Stats.({st_ty=DESC; more_to_follow=false;}) in 
+      let bits =  OP.marshal_and_sub 
+                  (OP.Stats.marshal_stats_resp xid (OP.Stats.Desc_resp(resp_h,
+                  desc))) 
+                  (OS.Io_page.get ()) in   
+      let _ = Channel.write_buffer t bits in
+        Channel.flush t 
+    | OP.Stats.Flow_req(req_h, of_match, table_id, out_port) ->
+      (*TODO Need to consider the  table_id and the out_port and 
+       * split reply over multiple openflow packets if they don't
+       * fit a single packet. *)
+      let match_flows of_match key value ret =
+        if (OP.Match.flow_match_compare key of_match 
+              of_match.OP.Match.wildcards) then 
+                ret @ 
+                [(Entry.flow_counters_to_flow_stats of_match (char_of_int 1)
+                value)] 
+        else 
+          ret 
+      in
+      let flows = 
+        Hashtbl.fold (fun key value r -> match_flows of_match key value r) 
+          st.Switch.table.Table.entries [] in 
+      let stats = OP.Stats.({st_ty=FLOW; more_to_follow=false;}) in 
+      let reply = OP.Stats.Flow_resp(stats, flows) in 
+      let bits = OP.marshal_and_sub (OP.Stats.marshal_stats_resp xid reply) 
+                  (OS.Io_page.get ()) in
+      let _ = Channel.write_buffer t bits in
+        Channel.flush t
+    | OP.Stats.Aggregate_req (req_h, of_match, table, port) -> 
+      let aggr_flow_bytes = ref 0L in
+      let aggr_flow_pkts = ref 0L in
+      let aggr_flows = ref 0l in            
+      let match_flows_aggr of_match key value =
+        if (OP.Match.flow_match_compare key of_match 
+              of_match.OP.Match.wildcards) then (
+          aggr_flows := Int32.add (!aggr_flows) 1l;
+          aggr_flow_bytes := Int64.add (!aggr_flow_bytes) 
+                              value.Entry.counters.Entry.n_bytes; 
+          aggr_flow_pkts := Int64.add (!aggr_flow_pkts)
                          value.Entry.counters.Entry.n_packets
-                     ) in 
-
-                Hashtbl.iter (fun key value -> match_flows_aggr of_match key (!value))
+          ) in 
+      Hashtbl.iter (fun key value -> match_flows_aggr of_match key value)
                     st.Switch.table.Table.entries;
-                let resp_h = (OP.Header.create OP.Header.STATS_RESP
-                    (OP.Header.get_len + 4 + 8 + 8 +8) h.OP.Header.xid) in
-                let data_snd = (BITSTRING{ (OP.Header.build_h resp_h):OP.Header.get_len*8:bitstring; 
-                    2:16; 0:16; (!aggr_flow_bytes):64; (!aggr_flow_pkts):64; (!aggr_flows):32; 0l:32}) in 
-                Channel.write_bitstring t data_snd >> 
-                Channel.flush t
-            | OP.Stats.Table_req(req) ->
-                let resp_h = (OP.Header.create OP.Header.STATS_RESP
-                    (OP.Header.get_len + 4 + 1+3+32+4+4+4+8+8) 
-                    h.OP.Header.xid) in                    
-                let name = "flow_table" in 
-                let desc_data =  BITSTRING{ 
-                    (OP.Header.build_h resp_h):OP.Header.get_len*8:bitstring; 
-                    3:16; 0:16; 1:8; 0:24;
-                    (Printf.sprintf "%s%s" name (String.make (32-(String.length name)) 
-                                                (Char.chr 0))):32*8:string;
-                    (OP.Wildcards.wildcard_to_bitstring OP.Wildcards.full_wildcard):32:bitstring; 
-                    0xFFFFFl:32; (Int32.of_int (Hashtbl.length
-                    st.Switch.table.Table.entries)):32; 0L:64; 0L:64} in
-                Channel.write_bitstring t desc_data >>  
-                Channel.flush t
-            | OP.Stats.Port_req(req_h, port) ->
-                match port with
-                | OP.Port.No_port -> ( 
-                    let resp_h = (OP.Header.create OP.Header.STATS_RESP
-                        (OP.Header.get_len + 4 + 104*(Hashtbl.length st.Switch.ports)) h.OP.Header.xid) in
-                    let ports_data = ref [] in 
-                        Hashtbl.iter (fun _ port -> ports_data := (!ports_data) @
-                        [(Switch.bitstring_of_port (!port))]) st.Switch.ports;
-                    let desc_data =  (Bitstring.concat 
-                        ([(OP.Header.build_h resp_h); (BITSTRING{4:16; 0:16});]@(!ports_data)))  in
-                    Channel.write_bitstring t desc_data >>  
-                    Channel.flush t)
-                | _ -> (
-(*
-                    if ( not (Hashtbl.mem st.Switch.int_ports
-                    (OP.Port.int_of_port port))) then
-                        Channel.write_bitstring t (OP.bitstring_of_error
-                        OP.QUEUE_OP_BAD_PORT bits  h.OP.Header.xid) >>  Channel.flush t
-                    else (
-                        let out_p = (!( Hashtbl.find st.Switch.int_ports (OP.Port.int_of_port port)))  in
-                        let resp_h = (OP.Header.create OP.Header.STATS_RESP
-                            (OP.Header.get_len + 4 + 104) h.OP.Header.xid) in
-                         Channel.write_bitstring t (Bitstring.concat 
-                        ([(OP.Header.build_h resp_h); (BITSTRING{4:16; 0:16});
-                        Switch.bitstring_of_port out_p])) >>
-                         Channel.flush t
- *)
-                    return ()
-                  
-                )
-          | _ ->  
-(*                 Channel.write_bitstring t (OP.bitstring_of_error
- *                 OP.REQUEST_BAD_TYPE bits xid) >> *)
-                Channel.flush t
-          )
-        )          
-      | OP.Get_config_req(h) 
-        -> let resp = OP.Switch.init_switch_config in
-            Channel.write_bitstring t (OP.Switch.bitstring_of_switch_config 
-                                         h.OP.Header.xid resp) >>
+      let stats = OP.Stats.({st_ty=AGGREGATE; more_to_follow=false;}) in  
+      let reply = OP.Stats.Aggregate_resp(stats, 
+                    OP.Stats.({byte_count=(!aggr_flow_bytes);
+                    packet_count=(!aggr_flow_pkts);
+                    flow_count=(!aggr_flows);})) 
+      in 
+      let bits = OP.marshal_and_sub (OP.Stats.marshal_stats_resp xid reply)
+                  (OS.Io_page.get ()) in
+      let _ =  Channel.write_buffer t bits in 
+        Channel.flush t
+    | OP.Stats.Table_req(req) ->
+      let stats = OP.Stats.({st_ty=TABLE; more_to_follow=false;}) in  
+      let reply = OP.Stats.Table_resp(stats, [st.Switch.table.Table.stats]) in 
+      let bits = OP.marshal_and_sub (OP.Stats.marshal_stats_resp xid reply) 
+                  (OS.Io_page.get ()) in
+      let _ = Channel.write_buffer t bits in 
+        Channel.flush t
+    | OP.Stats.Port_req(req_h, port) -> begin
+      match port with
+      | OP.Port.No_port -> 
+        let port_stats = List.map (fun p -> p.Switch.counter) st.Switch.ports in
+        let stats = OP.Stats.({st_ty=PORT; more_to_follow=false;}) in 
+        let reply = OP.Stats.Port_resp(stats, port_stats) in 
+        let bits = OP.marshal_and_sub (OP.Stats.marshal_stats_resp xid reply) 
+                    (OS.Io_page.get ()) in
+        let _ = Channel.write_buffer t bits in 
+          Channel.flush t
+      | OP.Port.Port(port_id) -> 
+        try_lwt 
+          let port = Hashtbl.find st.Switch.int_to_port port_id in
+          let stats = OP.Stats.({st_ty=PORT; more_to_follow=false;}) in 
+          let reply = OP.Stats.Port_resp(stats, [(!port).Switch.counter]) in 
+          let bits = OP.marshal_and_sub (OP.Stats.marshal_stats_resp xid reply) 
+                      (OS.Io_page.get ()) in
+          let _ = Channel.write_buffer t bits in 
             Channel.flush t
-      | OP.Barrier_req(h) ->
-            let resp_h = (OP.Header.create OP.Header.BARRIER_RESP
-                        (OP.Header.get_len) h.OP.Header.xid) in
-                 Channel.write_bitstring t (OP.Header.build_h resp_h) >>
-                  Channel.flush t
-      | OP.Packet_out(h, pkt) ->
-              Printf.printf "packet out received with actions : %s \n%!"
-              (OP.Flow.string_of_actions pkt.OP.Packet_out.actions);
-              (Switch.apply_of_actions st pkt.OP.Packet_out.in_port
-              pkt.OP.Packet_out.actions pkt.OP.Packet_out.data )
-      | OP.Flow_mod(h,fm)  ->
-           let of_match = fm.OP.Flow_mod.of_match in 
-           let of_actions = fm.OP.Flow_mod.actions in
-            (*Printf.printf "need to insert rule %s actions %s\n%!" 
-               (OP.Match.match_to_string of_match) 
+        with Not_found ->
+          (* TODO reply with right error code *)
+          pr "Invalid port_id in stats\n%!";
+          return ()
+        end
+      | _ -> 
+        let bits = OP.marshal_and_sub (OP.marshal_error  
+                    OP.REQUEST_BAD_SUBTYPE bits xid) (OS.Io_page.get ()) in
+        let _ = Channel.write_buffer t bits in 
+          Channel.flush t
+  end
+  | OP.Get_config_req(h) -> 
+    let resp = OP.Switch.init_switch_config in
+    let bits = OP.marshal_and_sub (OP.Switch.marshal_switch_config 
+                h.OP.Header.xid resp) (OS.Io_page.get ()) in
+    let _ = Channel.write_buffer t bits in 
+      Channel.flush t
+  | OP.Barrier_req(h) ->
+    let resp_h = (OP.Header.create OP.Header.BARRIER_RESP
+                  (OP.Header.sizeof_ofp_header) h.OP.Header.xid) in
+    let bits = OP.marshal_and_sub (OP.Header.marshal_header resp_h)        
+                (OS.Io_page.get ()) in
+    let _ = Channel.write_buffer t bits in 
+      Channel.flush t
+  | OP.Packet_out(h, pkt) ->
+    Printf.printf "packet out received with actions : %s \n%!"
+    (OP.Flow.string_of_actions pkt.OP.Packet_out.actions);
+    Switch.apply_of_actions st pkt.OP.Packet_out.in_port
+              pkt.OP.Packet_out.data pkt.OP.Packet_out.actions
+  | OP.Flow_mod(h,fm)  ->
+    let of_match = fm.OP.Flow_mod.of_match in 
+    let of_actions = fm.OP.Flow_mod.actions in
+    (*Printf.printf "need to insert rule %s actions %s\n%!" 
+    (OP.Match.match_to_string of_match) 
                (OP.Flow.string_of_actions fm.OP.Flow_mod.actions));
  *)
-           let _ = 
-             match (fm.OP.Flow_mod.command) with
-               | OP.Flow_mod.ADD 
-               | OP.Flow_mod.MODIFY 
-               | OP.Flow_mod.MODIFY_STRICT -> 
-                   (add_flow of_match of_actions)
-               | OP.Flow_mod.DELETE 
-               | OP.Flow_mod.DELETE_STRICT ->
-                   (del_flow of_match fm.OP.Flow_mod.out_port)
-           in
-             return ()
-      | _ -> 
-(*             Channel.write_bitstring t  *)
-(*             (OP.bitstring_of_error OP.REQUEST_BAD_TYPE bits  1l) >> *)
-            Channel.flush t
-  
+    let _ = 
+      match (fm.OP.Flow_mod.command) with
+      | OP.Flow_mod.ADD 
+      | OP.Flow_mod.MODIFY 
+      | OP.Flow_mod.MODIFY_STRICT -> 
+        add_flow of_match of_actions
+      | OP.Flow_mod.DELETE 
+      | OP.Flow_mod.DELETE_STRICT ->
+        del_flow of_match fm.OP.Flow_mod.out_port
+    in
+    return ()
+  | OP.Queue_get_config_resp (h, _, _)
+  | OP.Queue_get_config_req (h, _)
+  | OP.Barrier_resp h
+  | OP.Stats_resp (h, _)
+  | OP.Port_mod (h, _)
+  | OP.Port_status (h, _)
+  | OP.Flow_removed (h, _)
+  | OP.Packet_in (h, _)
+  | OP.Set_config (h, _)
+  | OP.Get_config_resp (h, _)
+  | OP.Features_resp (h, _)
+  | OP.Vendor (h, _, _)
+  | OP.Echo_resp (h, _)
+  | OP.Error (h, _) ->
+    let bits = OP.marshal_and_sub (OP.marshal_error         
+                OP.REQUEST_BAD_TYPE bits h.OP.Header.xid) 
+                (OS.Io_page.get ()) in
+    let _ = Channel.write_buffer t bits in 
+      Channel.flush t
 
-let rec rd_data len t = 
-  match len with
-    | 0 -> return Bitstring.empty_bitstring
-    | _ -> lwt data = (Channel.read_some ~len:len t) in 
-           let nbytes = ((Bitstring.bitstring_length data)/8) in
-           lwt more_data = (rd_data (len - nbytes) t) in
-           return (Bitstring.concat [ data; more_data ])
+let rec read_cache_data t data_cache len = 
+(*     Printf.printf "let rec read_cache_data t data_cache %d = \n%!" len; *)
+    match (len, !data_cache) with
+    | (0, _) -> 
+(*       pp "| (0, _) ->\n%!"; *)
+      return (Cstruct.sub (OS.Io_page.get ()) 0 0 )
+    | (_, []) ->
+(*       pp " | (_, []) ->\n%!"; *)
+      lwt data = Channel.read_some t in
+        data_cache := [data];
+        read_cache_data t data_cache len
+    | (_, [head]) when ((Cstruct.len head) = len) ->
+(*       pp "| (_, [head]) when ((Cstruct.len head) = len) -> \n%!"; *)
+      data_cache := [];
+      return head
+    | (_, [head]) when ((Cstruct.len head) < len) ->
+(*       pp "| (_, [head]) when ((Cstruct.len head) < len) -> \n%!"; *)
+      lwt data = (Channel.read_some t) in
+      data_cache := [head; data];
+      read_cache_data t data_cache len
+    | (_, [head]) when ((Cstruct.len head) > len) -> (
+(*       pp "| (_, [head]) when ((Cstruct.len head) > len) ->\n%!"; *)
+      data_cache := [(Cstruct.shift head len)];
+      return (Cstruct.sub head 0 len) )
+    | (_, head::tail) when ((Cstruct.len head) = len) -> (
+(*       pp "| (_, head::tail) when ((Cstruct.len head) = len) ->\n%!"; *)
+      data_cache := tail;
+      return head)
+    | (_, head::tail) when ((Cstruct.len head) > len) ->
+(*       pp "| (_, head::tail) when ((Cstruct.len head) > len) ->\n%!"; *)
+      data_cache := [(Cstruct.shift head len)] @ tail;
+      return (Cstruct.sub head 0 len) 
+    | (_, head::head_2::tail) when ((Cstruct.len head) > len) -> (
+(*       pp "| (_, head::head_2::tail) when ((Cstruct.len head) > len) ->\n%!";
+ *       *)
+      let head_len = Cstruct.len head in 
+      let buf = Cstruct.sub_buffer (OS.Io_page.get ()) 0 len in 
+      let _ = Cstruct.blit_buffer head 0 buf 0 head_len in
+      (* Maybe  -1  here? *)
+      let _ = Cstruct.blit_buffer buf (head_len - 1) head_2 0 (len -head_len) in 
+      let head_2 = Cstruct.shift head_2 (len -head_len) in
+      data_cache := [head_2] @ tail;
+      return buf)
+    | (_, _) ->
+(*       pp "| (_, _) ->\n%!"; *)
+      Printf.printf "read_cache_data and not match found\n%!";
+      return (Cstruct.sub (OS.Io_page.get ()) 0 0 )
 
-  let controller (remote_addr, remote_port) t =
-    let rs = Nettypes.ipv4_addr_to_string remote_addr in
-    Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port; 
-    st.Switch.controllers <- (st.Switch.controllers @ [t]);
-    let rec echo () =
-      try_lwt
-      lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in
-          ((Bitstring.bitstring_length hbuf)/8); 
-        let ofh  = OP.Header.parse_h hbuf in
-        let dlen = ofh.OP.Header.len - OP.Header.get_len in 
-        lwt dbuf = rd_data dlen t in
+let controller (remote_addr, remote_port) t =
+  let rs = Nettypes.ipv4_addr_to_string remote_addr in
+  Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port; 
+  st.Switch.controllers <- (st.Switch.controllers @ [t]);
+  let data_cache = ref [] in 
+  let rec echo () =
+    try_lwt
+      lwt hbuf = read_cache_data t data_cache OP.Header.sizeof_ofp_header in
+        let ofh  = OP.Header.parse_header  hbuf in
+        let dlen = ofh.OP.Header.len - OP.Header.sizeof_ofp_header in 
+        lwt dbuf = read_cache_data t data_cache dlen in
         let ofp  = OP.parse ofh dbuf in
-          process_of_packet st ofp t (* Bitstring.concat [hbuf; dbuf] *) 
+          process_openflow st t dbuf ofp (* Bitstring.concat [hbuf; dbuf] *) 
           >> echo ()
-      with
-        | Nettypes.Closed -> 
+    with
+    | Nettypes.Closed -> 
             (* TODO Need to remove the t from st.Switch.controllers *)
-            return ()
-        | OP.Unparsed (m, bs) -> (pr "# unparsed! m=%s\n %!" m); echo ()
+      return ()
+    | OP.Unparsed (m, bs) -> (pr "# unparsed! m=%s\n %!" m); echo ()
 
-    in echo () 
+  in 
+    echo () 
 
-let get_len_data data_cache len = 
+(*let get_len_data data_cache len = 
   bitmatch (!data_cache) with
     | {ret:len*8:bitstring; buff:-1:bitstring} ->
       (data_cache := buff; 
@@ -892,15 +746,12 @@ let controller_connect t =
     let rec echo () =
       try_lwt
         lwt hbuf = read_cache_data t data_cache (OP.Header.get_len ) in
-(*       lwt hbuf = Channel.read_some ~len:OP.Header.get_len t in *)
-(*           ((Bitstring.bitstring_length hbuf)/8);  *)
         let ofh  = OP.Header.parse_h hbuf in
         let dlen = ofh.OP.Header.len - OP.Header.get_len in 
         (* lwt dbuf = rd_data dlen t in *)
         lwt dbuf = read_cache_data t data_cache dlen in 
         let ofp  = OP.parse ofh dbuf in
         process_of_packet st ofp t 
-(*         (Bitstring.concat [hbuf; dbuf])  *)
         >> echo ()
       with
         | Nettypes.Closed -> 
@@ -908,7 +759,7 @@ let controller_connect t =
             return ()
         | OP.Unparsed (m, bs) -> (pr "# unparsed! m=%s\n %!" m); echo ()
 
-    in echo () 
+    in echo () *)
    
 let listen mgr loc init =
   init mgr st; 
