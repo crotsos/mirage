@@ -14,8 +14,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-type t
 type id = string
+
+type t = {
+  id: id;
+  fd: (int * Io_page.t) Lwt_stream.t;
+  fd_push : ((int * Io_page.t) option -> unit);
+  read_block: unit Lwt_condition.t;
+  mutable active: bool;
+  mac: string;
+}
 
 val listen : t -> (Io_page.t -> unit Lwt.t) -> unit Lwt.t
 val destroy : t -> unit Lwt.t
