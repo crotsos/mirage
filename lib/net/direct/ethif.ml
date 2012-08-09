@@ -33,21 +33,25 @@ cstruct ethernet {
 } as big_endian
 
 (* Handle a single input frame *)
-let input t frame =
-  match get_ethernet_ethertype frame with
-  |0x0806 -> (* ARP *)
-    Arp.input t.arp frame
-  |0x0800 -> (* IPv4 *)
-    let payload = Cstruct.shift frame sizeof_ethernet in 
-    t.ipv4 payload
-  |0x86dd -> (* IPv6 *)
-    return (printf "Ethif: discarding ipv6\n%!")
-  |etype ->
-    return (printf "Ethif: unknown frame %x\n%!" etype)
+let input ?(promiscuous=None) t frame =
+  match promiscuous with
+  | None -> begin
+    match get_ethernet_ethertype frame with
+    |0x0806 -> (* ARP *)
+      Arp.input t.arp frame
+    |0x0800 -> (* IPv4 *)
+      let payload = Cstruct.shift frame sizeof_ethernet in 
+      t.ipv4 payload
+    |0x86dd -> (* IPv6 *)
+      return (printf "Ethif: discarding ipv6\n%!")
+    |etype ->
+      return (printf "Ethif: unknown frame %x\n%!" etype)
+  end
+  | Some(promiscuous) -> promiscuous t.ethif frame 
 
 (* Loop and listen for frames *)
-let rec listen t =
-  OS.Netif.listen t.ethif (input t)
+let rec listen ?(promiscuous=None) t =
+  OS.Netif.listen t.ethif (input ~promiscuous t)
 
 (* Return an Ethernet buffer. The caller is responsible for creating a
  * sub-view of the payload. *)
@@ -60,7 +64,7 @@ let write t buf =
 let writev t bufs =
   OS.Netif.writev t.ethif bufs
 
-let create ethif =
+let create ?(promiscuous=None) ethif =
   let ipv4 = (fun _ -> return ()) in
   let mac = ethernet_mac_of_bytes (OS.Netif.mac ethif) in
   let arp =
@@ -69,7 +73,7 @@ let create ethif =
     let output buf = OS.Netif.write ethif buf in
     Arp.create ~output ~get_mac ~get_etherbuf in
   let t = { ethif; ipv4; mac; arp } in
-  let listen = listen t in
+  let listen = listen ~promiscuous t in
   (t, listen)
 
 let add_ip t = Arp.add_ip t.arp
