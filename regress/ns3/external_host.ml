@@ -10,6 +10,7 @@ let rec echo dst chan =
   lwt _ =
     while_lwt true do
       lwt buf = Channel.read_some chan in
+      Printf.printf "read %d bytes\n%!" (Cstruct.len buf);
       return ()
     done
   in

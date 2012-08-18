@@ -135,21 +135,12 @@ let ip = Net.Nettypes.(
     ))
 
 let main () =
-(*    Gc.set { (Gc.get()) with Gc.minor_heap_size = 128000000 };
-    Gc.set { (Gc.get()) with Gc.major_heap_increment = 128000000 };
-    Gc.set { (Gc.get()) with Gc.stack_limit = 128000000 };
-    Gc.set { (Gc.get()) with Gc.allocation_policy = 0 };
-    Gc.set { (Gc.get()) with Gc.space_overhead = 200 };*)
-
     Log.info "OF Controller" "starting controller";
     let t1 = Net.Manager.create (fun mgr interface id ->
-(*         Net.Manager.configure interface (`IPv4 ip);  *)
          Net.Manager.configure interface (`DHCP);  
-
         let port = 6633 in
         let t1 = (OC.listen mgr (None, port) init) in 
         t1 >> return (Log.info "OF Controller" "done!"))
         in 
-        (*     let t2 = terminate_controller () in *)
 (*         let t3 = memory_debug () in   *)
         t1  (* <&> t3  *)

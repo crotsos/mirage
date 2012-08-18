@@ -401,8 +401,8 @@ InitNodeState(void) {
 
 void
 ns3_init(void) {
-  GlobalValue::Bind ("SimulatorImplementationType", 
-      StringValue ("ns3::RealtimeSimulatorImpl"));  
+//  GlobalValue::Bind ("SimulatorImplementationType", 
+//      StringValue ("ns3::RealtimeSimulatorImpl"));  
 }
 
 /*
