@@ -16,7 +16,7 @@
 
 type bytes = string
 
-type ethernet_mac
+type ethernet_mac = string
 val ethernet_mac_of_bytes : string -> ethernet_mac
 val ethernet_mac_of_string : string -> ethernet_mac option
 val ethernet_mac_to_bytes : ethernet_mac -> bytes

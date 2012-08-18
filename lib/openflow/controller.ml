@@ -347,55 +347,35 @@ let rec read_cache_data t data_cache len =
       Printf.printf "read_cache_data and not match found\n%!";
       return (Cstruct.sub (OS.Io_page.get ()) 0 0 )
 
-let check_data_size req ret = 
-    if(req < ret ) then 
-        Printf.printf "req: %d, rep: %d\n" req ret
-
-let listen mgr loc init =
-  start := (OS.Clock.time ());
-  
-  let st = { dp_db                    = Hashtbl.create 0; 
-             channel_dp               = Hashtbl.create 0; 
-             datapath_join_cb         = []; 
-             datapath_leave_cb        = []; 
-             packet_in_cb             = [];
-             flow_removed_cb          = []; 
-             flow_stats_reply_cb      = [];
-             aggr_flow_stats_reply_cb = [];
-             desc_stats_reply_cb      = []; 
-             port_stats_reply_cb      = [];
-             table_stats_reply_cb     = [];
-             port_status_cb           = [];
-           }
-  in 
-   init st;    
-   let controller (remote_addr, remote_port) t =
-    let rs = Nettypes.ipv4_addr_to_string remote_addr in
-    let data_cache = ref [] in 
-    Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port;  
-    let echo () =
-      try_lwt 
-        lwt hbuf = read_cache_data t data_cache OP.Header.sizeof_ofp_header in
-        let ofh  = OP.Header.parse_header hbuf in
-        let dlen = ofh.OP.Header.len - OP.Header.sizeof_ofp_header in 
-        lwt dbuf = read_cache_data t data_cache dlen in 
-        let ofp  = OP.parse ofh dbuf in
-        lwt () = process_of_packet st (remote_addr, remote_port) ofp t in
-          return true
-      with
-      | Nettypes.Closed -> (
+let controller init st (remote_addr, remote_port) t =
+  let rs = Nettypes.ipv4_addr_to_string remote_addr in
+  let data_cache = ref [] in 
+  Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port;  
+  let _ = init st in 
+  let echo () =
+    try_lwt 
+      lwt hbuf = read_cache_data t data_cache OP.Header.sizeof_ofp_header in
+      let ofh  = OP.Header.parse_header hbuf in
+      let dlen = ofh.OP.Header.len - OP.Header.sizeof_ofp_header in 
+      lwt dbuf = read_cache_data t data_cache dlen in 
+      let ofp  = OP.parse ofh dbuf in
+      lwt () = process_of_packet st (remote_addr, remote_port) ofp t in
+        return true
+    with
+      | Nettypes.Closed -> begin
         let ep = {ip=remote_addr;port=remote_port} in 
         let dpid = (Hashtbl.find st.channel_dp ep) in
         let evt = Event.Datapath_leave (dpid) in
-        List.iter (fun cb -> resolve(cb st dpid evt)) st.datapath_leave_cb;
-        Hashtbl.remove st.channel_dp ep;
-        Hashtbl.remove st.dp_db dpid;
-        return false)
+        let _ = List.iter (fun cb -> resolve(cb st dpid evt))
+                  st.datapath_leave_cb in
+        let _ = Hashtbl.remove st.channel_dp ep in 
+        let _ = Hashtbl.remove st.dp_db dpid in 
+          return false
+      end
       | OP.Unparsed(m, bs) 
       | OP.Unparsable(m, bs) -> 
         cp (sp "# unparsed! m=%s" m);
         Cstruct.hexdump bs; 
-        Printf.printf "exception bits size %d\n%!" (Cstruct.len bs); 
         return true
       | Not_found ->  
         Printf.printf "Not found\n";  
@@ -409,6 +389,38 @@ let listen mgr loc init =
       continue := x;
       return ()
     done
-  in
 
-  (Channel.listen mgr (`TCPv4 (loc, controller))) 
+let listen mgr loc init =
+  let st = { dp_db                    = Hashtbl.create 0; 
+             channel_dp               = Hashtbl.create 0; 
+             datapath_join_cb         = []; 
+             datapath_leave_cb        = []; 
+             packet_in_cb             = [];
+             flow_removed_cb          = []; 
+             flow_stats_reply_cb      = [];
+             aggr_flow_stats_reply_cb = [];
+             desc_stats_reply_cb      = []; 
+             port_stats_reply_cb      = [];
+             table_stats_reply_cb     = [];
+             port_status_cb           = [];
+           } 
+  in
+    (Channel.listen mgr (`TCPv4 (loc, (controller init st) ))) 
+
+let connect mgr loc init = 
+  let st = { dp_db                    = Hashtbl.create 0; 
+             channel_dp               = Hashtbl.create 0; 
+             datapath_join_cb         = []; 
+             datapath_leave_cb        = []; 
+             packet_in_cb             = [];
+             flow_removed_cb          = []; 
+             flow_stats_reply_cb      = [];
+             aggr_flow_stats_reply_cb = [];
+             desc_stats_reply_cb      = []; 
+             port_stats_reply_cb      = [];
+             table_stats_reply_cb     = [];
+             port_status_cb           = [];
+           } 
+  in
+    Net.Channel.connect mgr (`TCPv4 (None, loc, 
+      (controller init st loc) ))

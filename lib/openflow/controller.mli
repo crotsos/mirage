@@ -57,3 +57,5 @@ val terminate : state -> unit
 val mem_dbg : string -> unit
 val listen : Net.Manager.t -> Net.Nettypes.ipv4_src -> 
   (state -> 'a) -> unit Lwt.t
+val connect : Net.Manager.t -> Net.Nettypes.ipv4_dst -> 
+  (state -> 'a) -> unit Lwt.t

@@ -901,7 +901,8 @@ module Match = struct
   cstruct nw_header {
     uint8_t        hlen_version;
     uint8_t        nw_tos;
-    uint8_t        pad[7];
+    uint16_t       total_len;
+    uint8_t        pad[5];
     uint8_t        nw_proto; 
     uint16_t       csum;
     uint32_t       nw_src; 
@@ -918,7 +919,6 @@ module Match = struct
     uint8_t code;
     uint16_t checksum
   } as big_endian
-
 
   let raw_packet_to_match in_port bits =
     let dl_dst = Cstruct.to_string (get_dl_header_dl_src bits) in 
@@ -1458,6 +1458,7 @@ module Packet_in = struct
       let _ = set_ofp_packet_in_buffer_id bits buffer_id in
       let _ = set_ofp_packet_in_total_len bits 
                 (sizeof_ofp_packet_in + (Cstruct.len data)) in
+      printf "pkt size : %d %d\n%!" (Cstruct.len bits) (Cstruct.len data);
       let _ = set_ofp_packet_in_reason bits  (int_of_reason reason) in
       let _ = Cstruct.blit_buffer data 0 bits sizeof_ofp_packet_in 
                 (Cstruct.len data) in 
