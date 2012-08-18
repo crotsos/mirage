@@ -24,15 +24,31 @@ exception Error of string
 type config = [ `DHCP | `IPv4 of ipv4_addr * ipv4_addr * ipv4_addr list ]
 
 type id = OS.Netif.id
+(*
 type interface
 type t
+*)
+type interface = {
+  id: id;
+  netif: Ethif.t;
+  ipv4: Ipv4.t;
+  icmp: Icmp.t;
+  udp: Udp.t;
+  tcp: Tcp.Pcb.t;
+}
+type interface_t = interface * unit Lwt.t
+
+type t = {
+  listener: t -> interface -> id -> unit Lwt.t;
+  listeners: (id, interface_t) Hashtbl.t;
+}
 val get_netif: interface -> Ethif.t
 
 val plug: t -> id -> OS.Netif.t -> unit Lwt.t
 val unplug: t -> id -> unit
 
 val configure: interface -> config -> unit Lwt.t
- 
+val plug: t -> id -> OS.Netif.t -> unit Lwt.t 
 val create : ?plug:(t -> id -> OS.Netif.t -> unit Lwt.t) 
   -> (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
 

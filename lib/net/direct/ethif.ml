@@ -24,6 +24,7 @@ type t = {
   mac: ethernet_mac;
   arp: Arp.t;
   mutable ipv4: (OS.Io_page.t -> unit Lwt.t);
+  mutable promiscuous:(t -> Cstruct.buf -> unit Lwt.t) option;
 }
 
 cstruct ethernet {
@@ -33,8 +34,8 @@ cstruct ethernet {
 } as big_endian
 
 (* Handle a single input frame *)
-let input ?(promiscuous=None) t frame =
-  match promiscuous with
+let input t frame =
+  match t.promiscuous with
   | None -> begin
     match get_ethernet_ethertype frame with
     |0x0806 -> (* ARP *)
@@ -47,11 +48,14 @@ let input ?(promiscuous=None) t frame =
     |etype ->
       return (printf "Ethif: unknown frame %x\n%!" etype)
   end
-  | Some(promiscuous) -> promiscuous t.ethif frame 
+  | Some(promiscuous) -> promiscuous t frame 
+
+let set_promiscuous t f =
+  t.promiscuous <- Some(f)
 
 (* Loop and listen for frames *)
-let rec listen ?(promiscuous=None) t =
-  OS.Netif.listen t.ethif (input ~promiscuous t)
+let rec listen t =
+  OS.Netif.listen t.ethif (input t)
 
 (* Return an Ethernet buffer. The caller is responsible for creating a
  * sub-view of the payload. *)
@@ -64,7 +68,7 @@ let write t buf =
 let writev t bufs =
   OS.Netif.writev t.ethif bufs
 
-let create ?(promiscuous=None) ethif =
+let create ethif =
   let ipv4 = (fun _ -> return ()) in
   let mac = ethernet_mac_of_bytes (OS.Netif.mac ethif) in
   let arp =
@@ -72,8 +76,8 @@ let create ?(promiscuous=None) ethif =
     let get_etherbuf () = OS.Netif.get_writebuf ethif in
     let output buf = OS.Netif.write ethif buf in
     Arp.create ~output ~get_mac ~get_etherbuf in
-  let t = { ethif; ipv4; mac; arp } in
-  let listen = listen ~promiscuous t in
+    let t = { ethif; ipv4; mac; arp; promiscuous=None; } in
+  let listen = listen t in
   (t, listen)
 
 let add_ip t = Arp.add_ip t.arp

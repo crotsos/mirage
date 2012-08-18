@@ -17,16 +17,20 @@
 
 open Nettypes
 
-type t
+type t = {
+  ethif: OS.Netif.t;
+  mac: ethernet_mac;
+  arp: Arp.t;
+  mutable ipv4: (OS.Io_page.t -> unit Lwt.t);
+  mutable promiscuous:(t -> Cstruct.buf -> unit Lwt.t) option;
+}
 
-val input : ?promiscuous:((OS.Netif.t -> OS.Io_page.t -> unit Lwt.t) option) -> 
-  t -> OS.Io_page.t -> unit Lwt.t
-val listen : ?promiscuous:((OS.Netif.t -> OS.Io_page.t -> unit Lwt.t) option) ->
-  t -> unit Lwt.t
+val input : t -> OS.Io_page.t -> unit Lwt.t
+val listen : t -> unit Lwt.t
+val set_promiscuous : t -> (t -> OS.Io_page.t -> unit Lwt.t) -> unit
 val write : t -> OS.Io_page.t -> unit Lwt.t
 val writev : t -> OS.Io_page.t list -> unit Lwt.t
-val create : ?promiscuous:((OS.Netif.t -> OS.Io_page.t -> unit Lwt.t) option)
-    ->OS.Netif.t -> t * unit Lwt.t
+val create : OS.Netif.t -> t * unit Lwt.t
 
 val add_ip : t -> Nettypes.ipv4_addr -> unit Lwt.t
 val remove_ip : t -> Nettypes.ipv4_addr -> unit Lwt.t
