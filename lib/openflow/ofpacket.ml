@@ -1,5 +1,6 @@
 (*
  * Copyright (c) 2011 Richard Mortier <mort@cantab.net>
+                      Charalampos Rotsos <cr409@cl.cam.ac.uk> 
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -422,15 +423,17 @@ module Port = struct
     peer=init_port_features;}
 
    let marshal_phy phy bits =
-     set_ofp_phy_port_port_no bits phy.port_no;
-     set_ofp_phy_port_hw_addr phy.hw_addr 0 bits;
-     set_ofp_phy_port_name phy.name 0 bits;
-     set_ofp_phy_port_config bits 0l;
-     set_ofp_phy_port_state bits 0l;
-     set_ofp_phy_port_curr bits 0l;
-     set_ofp_phy_port_advertised bits 0l;
-     set_ofp_phy_port_supported bits 0l;
-     set_ofp_phy_port_peer bits 0l;
+     let _ = set_ofp_phy_port_port_no bits phy.port_no in
+     let _ = set_ofp_phy_port_hw_addr phy.hw_addr 0 bits in
+     let name = String.make 16 (char_of_int 0) in
+     let _ = String.blit phy.name 0 name 0 (String.length phy.name) in 
+     let _ = set_ofp_phy_port_name name 0 bits in
+     let _ = set_ofp_phy_port_config bits 0l in
+     let _ = set_ofp_phy_port_state bits 0l in
+     let _ = set_ofp_phy_port_curr bits 0l in
+     let _ = set_ofp_phy_port_advertised bits 0l in
+     let _ = set_ofp_phy_port_supported bits 0l in
+     let _ = set_ofp_phy_port_peer bits 0l in
        Cstruct.shift bits sizeof_ofp_phy_port
 
   let string_of_phy ph = 
@@ -845,7 +848,7 @@ module Match = struct
     let _ = set_ofp_match_nw_dst bits m.nw_dst in
     let _ = set_ofp_match_tp_src bits m.tp_src in
     let _ = set_ofp_match_tp_dst bits m.tp_dst in 
-      Cstruct.shift bits sizeof_ofp_match 
+      sizeof_ofp_match 
 
   let parse_match bits = 
     let wildcards = Wildcards.parse_wildcards (get_ofp_match_wildcards bits) in
@@ -889,8 +892,8 @@ module Match = struct
   cstruct arphdr {
     uint16_t ar_hrd;         
     uint16_t ar_pro;         
-    uint16_t ar_hln;              
-    uint16_t ar_pln;              
+    uint8_t ar_hln;              
+    uint8_t ar_pln;              
     uint16_t ar_op;          
     uint8_t ar_sha[6];  
     uint32_t nw_src;
@@ -921,7 +924,7 @@ module Match = struct
   } as big_endian
 
   let raw_packet_to_match in_port bits =
-    let dl_dst = Cstruct.to_string (get_dl_header_dl_src bits) in 
+    let dl_dst = Cstruct.to_string (get_dl_header_dl_dst bits) in 
     let dl_src = Cstruct.to_string (get_dl_header_dl_src bits) in
     let dl_type = get_dl_header_dl_type bits in
     let bits = Cstruct.shift bits sizeof_dl_header in 
@@ -1070,7 +1073,7 @@ module Flow = struct
     | 10 -> Set_tp_dst (0)
     | 11 -> Enqueue ((Port.port_of_int 0), 0l)
     | 0xffff -> VENDOR_ACT
-    | _ -> invalid_arg "action_of_int"
+    | a -> invalid_arg (sp "action_of_int %04x" a)
   and int_of_action = function 
     | Output _     -> 0 
     | Set_vlan_vid _ -> 1 
@@ -1288,12 +1291,14 @@ module Flow = struct
   let rec parse_actions bits =
     match (Cstruct.len bits) with
     | 0 -> (0, [])
-    | l when ((l = 8) || (l = 16)) ->
+    | l when ((l mod 8) = 0) ->
       let (len, action) = parse_action bits in 
       let bits = Cstruct.shift bits len in 
       let (len_rest, actions) = parse_actions bits in 
         (len + len_rest, [action] @ actions)
-    | _ -> raise (Unparsable("parse_actions", bits))
+    | _ -> 
+        printf "len of action cstruct %d\n%!" (Cstruct.len bits); 
+        raise (Unparsable("parse_actions", bits))
 
   type reason = IDLE_TIMEOUT | HARD_TIMEOUT | DELETE
   let reason_of_int = function
@@ -1408,6 +1413,54 @@ module Flow = struct
     end
 end
 
+module Packet_out = struct
+  type t = {
+    buffer_id: uint32;
+    in_port: Port.t;
+    actions: Flow.action list;
+    data : Cstruct.buf;
+  }
+
+  cstruct ofp_packet_out {
+    uint32_t buffer_id;      
+    uint16_t in_port;        
+    uint16_t actions_len
+  } as big_endian
+
+  let packet_out_to_string p = 
+    sp "Packet_out: buffer_id:%ld in_port:%s actions:%s"
+      p.buffer_id (Port.string_of_port p.in_port) (Flow.string_of_actions p.actions)
+
+  let parse_packet_out bits = 
+    let buffer_id = get_ofp_packet_out_buffer_id bits in
+    let in_port = Port.port_of_int (get_ofp_packet_out_in_port bits) in
+    let act_len = get_ofp_packet_out_actions_len bits in 
+    let bits = Cstruct.shift bits sizeof_ofp_packet_out in
+    let action_bits =  Cstruct.sub bits 0 act_len in
+    let (_, actions) = Flow.parse_actions action_bits in
+    let data = Cstruct.shift bits act_len in 
+    { buffer_id; in_port; actions; data; }
+
+  let create ?(xid=0l) ?(buffer_id =(-1l)) ?(actions = [] ) 
+      ~data ~in_port () =
+    {buffer_id; in_port; actions; data;} 
+
+  let marshal_packet_out m bits =
+    let size = (Header.sizeof_ofp_header + sizeof_ofp_packet_out + 
+                (Flow.actions_len m.actions) + (Cstruct.len m.data)) in
+    let of_header=(Header.(create PACKET_OUT size 0l)) in
+    let (ofp_len, bits) = marshal_and_shift (Header.marshal_header of_header)
+    bits in
+    let _ = set_ofp_packet_out_buffer_id bits m.buffer_id in
+    let _ = set_ofp_packet_out_in_port bits (Port.int_of_port m.in_port) in
+    let _ = set_ofp_packet_out_actions_len bits (Flow.actions_len m.actions) in
+    let bits = Cstruct.shift bits sizeof_ofp_packet_out in
+    let (act_len, bits) = marshal_and_shift (Flow.marshal_actions m.actions) bits in
+    let _ = Cstruct.blit_buffer m.data 0 bits 0 (Cstruct.len m.data) in
+      size
+
+end
+
 module Packet_in = struct
   type reason = NO_MATCH | ACTION
   let reason_of_int = function
@@ -1449,63 +1502,33 @@ module Packet_in = struct
     sp "Packet_in: buffer_id:%ld in_port:%s reason:%s"
       p.buffer_id (Port.string_of_port p.in_port) (string_of_reason p.reason)
 
-  let marshal_pkt_in ~port ~reason ?(buffer_id=(-1l)) ?(xid=0l) data 
-        bits =
-      let h = Header.create Header.PACKET_IN (Header.get_len +
-                        sizeof_ofp_packet_in + (Cstruct.len data)) xid in
-    
+  let create_pkt_in ?(buffer_id=(-1l)) ~in_port ~reason ~data = 
+    {buffer_id; in_port; reason; data;}
+
+  let marshal_pkt_in ?(xid=(Random.int32 Int32.max_int)) ?(data_len=0)
+        t bits =
+      let data_len = 
+        if (data_len = 0) then
+          Cstruct.len t.data 
+        else (
+          if (data_len < (Cstruct.len t.data)) then
+            data_len
+          else 
+            Cstruct.len t.data 
+          )
+      in 
+      let h = Header.create Header.PACKET_IN (Header.sizeof_ofp_header +
+                        sizeof_ofp_packet_in + data_len) xid in 
       let (ofp_len, bits) = marshal_and_shift (Header.marshal_header h) bits in
-      let _ = set_ofp_packet_in_buffer_id bits buffer_id in
-      let _ = set_ofp_packet_in_total_len bits 
-                (sizeof_ofp_packet_in + (Cstruct.len data)) in
-      printf "pkt size : %d %d\n%!" (Cstruct.len bits) (Cstruct.len data);
-      let _ = set_ofp_packet_in_reason bits  (int_of_reason reason) in
-      let _ = Cstruct.blit_buffer data 0 bits sizeof_ofp_packet_in 
-                (Cstruct.len data) in 
-        ofp_len + sizeof_ofp_packet_in + (Cstruct.len data)
+      let _ = set_ofp_packet_in_buffer_id bits t.buffer_id in
+      let _ = set_ofp_packet_in_total_len bits (sizeof_ofp_packet_in + data_len) in
+      let _ = set_ofp_packet_in_in_port bits (Port.int_of_port t.in_port) in 
+      let _ = set_ofp_packet_in_reason bits  (int_of_reason t.reason) in
+      let _ = Cstruct.blit_buffer t.data 0 bits sizeof_ofp_packet_in 
+                data_len in 
+        ofp_len + sizeof_ofp_packet_in + data_len
 end
 
-module Packet_out = struct
-  type t = {
-    buffer_id: uint32;
-    in_port: Port.t;
-    actions: Flow.action list;
-    data : Cstruct.buf;
-  }
-
-  cstruct ofp_packet_out {
-    uint32_t buffer_id;      
-    uint16_t in_port;        
-    uint16_t actions_len
-  } as big_endian
-
-  let parse_packet_out bits = 
-    let buffer_id = get_ofp_packet_out_buffer_id bits in
-    let in_port = Port.port_of_int (get_ofp_packet_out_in_port bits) in
-    let data = Cstruct.shift bits sizeof_ofp_packet_out in
-    let (_, actions) = Flow.parse_actions bits in
-    { buffer_id; in_port; actions; data; }
-
-  let create ?(xid=0l) ?(buffer_id =(-1l)) ?(actions = [] ) 
-      ~data ~in_port () =
-    {buffer_id; in_port; actions; data;} 
-
-  let marshal_packet_out m bits =
-    let size = (Header.get_len + sizeof_ofp_packet_out + (Cstruct.len m.data)) in
-    let action_len = (List.fold_right (fun a l -> l+(Flow.len_of_action a)) 
-       m.actions) 0 in
-    let of_header=(Header.(create PACKET_OUT (size + action_len) 0l)) in
-    let (ofp_len, bits) = marshal_and_shift (Header.marshal_header of_header)
-    bits in
-    let _ = set_ofp_packet_out_buffer_id bits m.buffer_id in
-    let _ = set_ofp_packet_out_in_port bits (Port.int_of_port m.in_port) in
-    let _ = set_ofp_packet_out_actions_len bits action_len in
-    let bits = Cstruct.shift bits sizeof_ofp_packet_out in
-    let (act_len, bits) = marshal_and_shift (Flow.marshal_actions m.actions) bits in
-    let _ = Cstruct.blit_buffer m.data 0 bits 0 (Cstruct.len m.data) in
-      ofp_len + sizeof_ofp_packet_out + act_len + (Cstruct.len m.data) 
-
-end
 
 (* this is a message only from the controller to the witch so
  * we can allow to parse inline the packet *)
@@ -1574,10 +1597,6 @@ module Flow_mod = struct
     uint16_t flags
   } as big_endian
 
-(*
-  let total_len = 24 + (Header.get_len) + (Match.get_len) 
-*)
-
   let create flow_match cookie command ?(priority = 0) 
       ?(idle_timeout = 60) ?(hard_timeout = 0)
       ?(buffer_id =  -1 ) ?(out_port = Port.No_port) 
@@ -1594,11 +1613,11 @@ module Flow_mod = struct
     }
 
   let marshal_flow_mod ?(xid=(Random.int32 Int32.max_int)) m bits =
-    let len = Header.sizeof_ofp_header + sizeof_ofp_flow_mod +
-                (Flow.actions_len m.actions) in
+    let len = Header.sizeof_ofp_header + Match.sizeof_ofp_match + 
+              sizeof_ofp_flow_mod + (Flow.actions_len m.actions) in
     let header = Header.create Header.FLOW_MOD len xid in 
-    let _ = Header.marshal_header header bits in 
-    let _ = Match.marshal_match m.of_match bits in 
+    let (_, bits) = marshal_and_shift (Header.marshal_header header) bits in 
+    let (_, bits) = marshal_and_shift (Match.marshal_match m.of_match) bits in 
     let _ = set_ofp_flow_mod_cookie bits m.cookie in 
     let _ = set_ofp_flow_mod_command bits (int_of_command m.command) in
     let _ = set_ofp_flow_mod_idle_timeout bits m.idle_timeout in 
@@ -1607,12 +1626,20 @@ module Flow_mod = struct
     let _ = set_ofp_flow_mod_buffer_id bits m.buffer_id in
     let _ = set_ofp_flow_mod_out_port bits (Port.int_of_port m.out_port) in
     let _ = set_ofp_flow_mod_flags bits (marshal_flags m.flags) in 
-    let _ = Cstruct.shift bits sizeof_ofp_flow_mod in 
-    let _ = Flow.marshal_actions m.actions bits in 
+    let bits = Cstruct.shift bits sizeof_ofp_flow_mod in 
+    let (_, bits) = marshal_and_shift (Flow.marshal_actions m.actions) bits in 
       len
-    
+
+  let flow_mod_to_string t = 
+    sp "cookie:%08Lx, command:%s, idle:%d, hard:%d, priority:%d, buffer_id:%ld, \
+        port:%s, match:[%s] actions:[%s]"
+      t.cookie (string_of_command t.command) t.idle_timeout t.hard_timeout
+      t.priority t.buffer_id (Port.string_of_port t.out_port) 
+      (Match.match_to_string t.of_match) (Flow.string_of_actions t.actions) 
+
   let parse_flow_mod bits = 
-    let of_match = Match.parse_match bits in 
+    let of_match = Match.parse_match bits in
+    let bits = Cstruct.shift bits Match.sizeof_ofp_match in
     let cookie = get_ofp_flow_mod_cookie bits in 
     let command = command_of_int (get_ofp_flow_mod_command bits) in
     let idle_timeout = get_ofp_flow_mod_idle_timeout bits in 
@@ -1621,7 +1648,7 @@ module Flow_mod = struct
     let buffer_id = get_ofp_flow_mod_buffer_id bits in 
     let out_port = Port.port_of_int (get_ofp_flow_mod_out_port bits) in 
     let flags = parse_flags (get_ofp_flow_mod_flags bits) in
-    let _ = Cstruct.shift bits sizeof_ofp_flow_mod in 
+    let bits = Cstruct.shift bits sizeof_ofp_flow_mod in 
     let (_, actions) = Flow.parse_actions bits in 
       {of_match; cookie; command; idle_timeout; hard_timeout;
       priority; buffer_id; out_port; 

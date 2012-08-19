@@ -1,3 +1,20 @@
+(*
+ * Copyright (c) 2011 Richard Mortier <mort@cantab.net>
+                      Charalampos Rotsos <cr409@cl.cam.ac.uk> 
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *)
+
 exception Unparsable of string * Cstruct.buf
 exception Unparsed of string * Cstruct.buf
 
@@ -281,9 +298,10 @@ module Packet_in :
       data : Cstruct.buf;
     }
     val packet_in_to_string : t -> string
-    val marshal_pkt_in : port:Port.t -> reason:reason -> 
-      ?buffer_id:uint32 -> ?xid:uint32 -> Cstruct.buf -> 
-      Cstruct.buf -> int 
+    val create_pkt_in : ?buffer_id:uint32 -> in_port:Port.t -> 
+      reason:reason -> data:Cstruct.buf -> t 
+    val marshal_pkt_in : ?xid:int32 -> ?data_len:int -> t -> 
+      Cstruct.buf -> int
   end
 module Packet_out :
   sig
@@ -300,6 +318,7 @@ module Packet_out :
       data:Cstruct.buf -> in_port:Port.t -> 
         unit -> t
     val marshal_packet_out : t -> Cstruct.buf -> int
+    val packet_out_to_string: t -> string
   end
 module Flow_mod :
   sig
@@ -320,6 +339,7 @@ module Flow_mod :
       flags : flags;
       actions : Flow.action list; (* array; *)
     }
+    val flow_mod_to_string: t -> string
     val create :
       Match.t -> uint64 -> command ->
       ?priority:uint16 ->
