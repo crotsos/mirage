@@ -26,6 +26,8 @@ module OE = OC.Event
 let port = 55555
 let use_dhcp = false
 
+let pp = Printf.printf
+
 (*********************************************************
  * Host configuration code and traffic generation code 
  *********************************************************)
@@ -90,6 +92,7 @@ let host_inner host_id () =
   let config_host host_id =
     try_lwt 
       Manager.create (fun mgr interface id ->
+        lwt _ = Time.sleep 0.1 in 
         match host_id with
         | 1 ->
           lwt _ = Manager.configure interface (`IPv4 (ip host_id)) in
@@ -102,7 +105,7 @@ let host_inner host_id () =
           lwt _ = Time.sleep 1.0 in
           Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
             echo_client_udp mgr (dst_ip,port)
-        | 0 -> return (printf "Invalid node_id %d\n%!" host_id)
+        | _ -> return (printf "Invalid node_id %d\n%!" host_id)
         )
     with e ->
       Printf.eprintf "Error: %s" (Printexc.to_string e); 
@@ -114,8 +117,94 @@ let host_inner host_id () =
  *   OpenFlow controller code 
  ****************************************************************)
 
+(* TODO this the mapping is incorrect. the datapath must be moved to the key
+ * of the hashtbl *)
+type mac_switch = {
+  addr: OP.eaddr; 
+  switch: OP.datapath_id;
+}
+
+type switch_state = {
+(*   mutable mac_cache: (mac_switch, OP.Port.t) Hashtbl.t; *)
+  mutable mac_cache: (OP.eaddr, OP.Port.t) Hashtbl.t; 
+  mutable dpid: OP.datapath_id list;
+  mutable of_ctrl: OC.t list;
+  req_count: int ref; 
+}
+
+let switch_data = 
+  { mac_cache = Hashtbl.create 0; dpid = []; of_ctrl = []; 
+  req_count=(ref 0);} 
+
+let datapath_join_cb controller dpid evt =
+  let dp = 
+    match evt with
+      | OE.Datapath_join c -> c
+      | _ -> invalid_arg "bogus datapath_join event match!" 
+  in
+  switch_data.dpid <- switch_data.dpid @ [dp];
+  return (pp "+ datapath:0x%012Lx\n" dp)
+
+let packet_in_cb controller dpid evt =
+  printf "XXXXXXX Packet in received\n%!";
+  incr switch_data.req_count;
+  let (in_port, buffer_id, data, dp) = 
+    match evt with
+      | OE.Packet_in (inp, buf, dat, dp) -> (inp, buf, dat, dp)
+      | _ -> invalid_arg "bogus datapath_join event match!"
+  in
+  (* Parse Ethernet header *)
+  let m = OP.Match.raw_packet_to_match in_port data in 
+
+  (* Store src mac address and incoming port *)
+  let ix = m.OP.Match.dl_src in
+  let _ = Hashtbl.replace switch_data.mac_cache ix in_port in
+ 
+  (* check if I know the output port in order to define what type of message
+   * we need to send *)
+ let ix = m.OP.Match.dl_dst in
+  if ( (ix = Nettypes.ethernet_mac_broadcast)
+       || (not (Hashtbl.mem switch_data.mac_cache ix)) ) 
+  then (
+    let bs = 
+      OP.marshal_and_sub 
+      ( OP.Packet_out.marshal_packet_out  
+          (OP.Packet_out.create
+             ~buffer_id:buffer_id 
+             ~actions:[ OP.(Flow.Output(Port.All , 2000))] 
+           ~data:data ~in_port:in_port () )) (OS.Io_page.get ()) in   
+        OC.send_of_data controller dpid bs
+  ) else (
+    let out_port = (Hashtbl.find switch_data.mac_cache ix) in
+    lwt _ = 
+      if (buffer_id = -1l) then
+        (* Need to send also the packet in cache the packet is not cached *)
+        let bs = 
+          OP.marshal_and_sub 
+            ( OP.Packet_out.marshal_packet_out  
+                (OP.Packet_out.create
+                   ~buffer_id:buffer_id 
+                   ~actions:[ OP.(Flow.Output(out_port, 2000))] 
+                   ~data:data ~in_port:in_port () )) (OS.Io_page.get ()) in   
+          OC.send_of_data controller dpid bs      
+      else
+        return ()
+    in
+    let pkt = 
+      OP.marshal_and_sub 
+        ( OP.Flow_mod.marshal_flow_mod 
+            (OP.Flow_mod.create m 0_L OP.Flow_mod.ADD 
+                ~buffer_id:(Int32.to_int buffer_id)
+                 [OP.Flow.Output(out_port, 2000)] ()))
+        (OS.Io_page.get ()) in
+      OC.send_of_data controller dpid pkt
+ )
+
 let init st = 
-  printf "XXXXXXXXXXXXXXXXX controller init called :D\n%!"
+  if (not (List.mem st switch_data.of_ctrl)) then
+    switch_data.of_ctrl <- (([st] @ switch_data.of_ctrl));
+  OC.register_cb st OE.DATAPATH_JOIN datapath_join_cb;
+  OC.register_cb st OE.PACKET_IN packet_in_cb
 
 let controller_inner () = 
   printf "%f: running of controller net config\n%!" (Clock.time ());
@@ -126,10 +215,7 @@ let controller_inner () =
           (ipv4_addr_of_tuple (10l,0l,0l,2l),
           ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
       lwt _ = Manager.configure interface (`IPv4 ip) in
-      Printf.printf "XXXXXXXXX %f: trying to connect controller\n%!" (Clock.time ());
-      lwt _ = Time.sleep 0.5 in
-      Printf.printf "XXXXXXXXX %f: connecting controller\n%!" (Clock.time ());
-      let dst = ((Nettypes.ipv4_addr_of_tuple (10l,0l,0l,2l)), 6633) in 
+      let dst = ((Nettypes.ipv4_addr_of_tuple (10l,0l,0l,1l)), 6633) in 
         OC.connect mgr dst init 
       )
   with exn -> 
@@ -140,9 +226,11 @@ let controller_inner () =
  *****************************************************************)
 let switch_plug sw t id vif =
   printf "Manager: plug %s\n%!" id; 
+(*
   let wrap (s,t) = try_lwt t >>= return with exn ->
     (printf "Manager: exn=%s %s\n%!" s (Printexc.to_string exn); fail exn) in
 
+ *)
   match (id) with 
   | "0" ->
   (*
@@ -158,13 +246,14 @@ let switch_plug sw t id vif =
      * *)
     let (netif, netif_t) = Ethif.create vif in
     let _ = Openflow.Ofswitch.add_port sw netif in  
+(*
     let th,_ = Lwt.task () in
+ *)
     printf "Manager: plug done, to listener\n%!";
       return ()
   end 
 
 let switch_inner () = 
-  printf "%f: running switch\n%!" (Clock.time ());
   let sw = Openflow.Ofswitch.create_switch () in
   try_lwt 
     Manager.create ~plug:(switch_plug sw) (fun mgr interface id ->
@@ -173,7 +262,6 @@ let switch_inner () =
           (ipv4_addr_of_tuple (10l,0l,0l,1l),
           ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
       lwt _ = Manager.configure interface (`IPv4 ip) in
-      Printf.printf "XXXXXXXXX %f: switch listening\n%!" (Clock.time ());
       lwt _ = Openflow.Ofswitch.listen sw mgr (None, 6633) in 
       return ()
     )
@@ -183,15 +271,16 @@ let switch_inner () =
 
 (* Design the topology *)
 let run () =
- (* Define participating nodes *)
-  Topology.add_node "switch" switch_inner; 
-  Topology.add_node "controller" controller_inner; 
-  Topology.add_node "node1" (host_inner 1);
-  Topology.add_node "node2" (host_inner 2);
+  let _ = OS.Time.set_duration 60 in 
+  (* Define participating nodes *)
+  let _ = Topology.add_node "switch" switch_inner in 
+  let _ = Topology.add_node "controller" controller_inner in 
+  let _ = Topology.add_node "node1" (host_inner 1) in
+  let _ = Topology.add_node "node2" (host_inner 2) in
 
   (* Define topology *)
-  Topology.add_link "controller" "switch";
-  Topology.add_link "node1" "switch";
-  Topology.add_link "node2" "switch";
+  let _ = Topology.add_link "controller" "switch" in
+  let _ = Topology.add_link "node1" "switch" in
+  let _ = Topology.add_link "node2" "switch" in
     ()
 (*   OS.Topology.add_external_dev "nstap0" "node1" "10.0.1.0" "255.255.255.0" *)
