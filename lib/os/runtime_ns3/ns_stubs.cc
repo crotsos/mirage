@@ -146,7 +146,6 @@ ocaml_ns3_add_timer_event(value p_ts, value p_id) {
  */
 static void
 DeviceHandler(Ptr<NetDevice> dev) {
-  printf("New device registered on node\n");
   string node_name;
   uint8_t *mac;
 
@@ -198,15 +197,17 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto,
 CAMLprim value
 caml_pkt_write(value v_node_name, value v_id, value v_ba, 
     value v_off, value v_len) {
+
   CAMLparam5(v_node_name, v_id, v_ba, v_off, v_len);
   
   uint32_t ifIx = (uint32_t)Int_val(v_id);
   string node_name = string(String_val(v_node_name));
-  int len = Int_val(v_len), off = Int_val(v_off);
+  int len = Int_val(v_len), off =  0; //Int_val(v_off);
 
   //get a pointer to the packet byte data
   uint8_t *buf = (uint8_t *) Caml_ba_data_val(v_ba);
   Ptr< Packet> pkt = Create<Packet>(buf + off + 14, len - 14);
+
 
   // rther proto of the packet. 
   uint16_t proto = ntohs(*(uint16_t *)(buf + off + 12));
@@ -216,10 +217,12 @@ caml_pkt_write(value v_node_name, value v_id, value v_ba,
 
   Mac48Address mac_dst;
   mac_dst.CopyFrom(buf + off);
+  Mac48Address mac_src;
+  mac_src.CopyFrom(buf + off + 6);
   for (uint32_t i = 0; i < node->GetNDevices (); i++) 
     if((node->GetDevice(i)->GetIfIndex() == ifIx) && 
         (node->GetDevice(i)->IsLinkUp())) { 
-      if(!node->GetDevice(i)->Send(pkt, mac_dst, proto))
+      if(!node->GetDevice(i)->SendFrom(pkt, mac_src, mac_dst, proto))
         fprintf(stdout, "%f: packet dropped...\n",
             (long)Simulator::Now().GetMicroSeconds() / 1e6);
     }
@@ -277,7 +280,6 @@ ocaml_ns3_add_node(value ocaml_name)
 {
   CAMLparam1( ocaml_name );
   string name =  string(String_val(ocaml_name));
-  fprintf(stderr, "Adding node %s\n", name.c_str());
 
   // create a single node for the new host
   NodeContainer node;
@@ -297,8 +299,6 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   CAMLparam2(ocaml_node_a, ocaml_node_b);
   string node_a = string(String_val(ocaml_node_a));
   string node_b = string(String_val(ocaml_node_b));
-  fprintf(stderr, "Adding link between nodes %s - %s\n", 
-      node_a.c_str(), node_b.c_str());
 
   // create a single node for the new host
   NodeContainer cont = NodeContainer(nodes[node_a], nodes[node_b]);
@@ -314,7 +314,7 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
 
   //capture pcap trace
-  string filename = string("openflow-switch-")+node_a+string("-")+node_b;
+  string filename = string("ns3-")+node_a+string("-")+node_b;
   csma.EnablePcapAll (filename, false);
 
   CAMLreturn ( Val_unit );
