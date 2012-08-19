@@ -49,13 +49,13 @@ module Event :
     val string_of_event : e -> string
   end
 
-type state 
-val register_cb : state -> Event.t -> 
-  (state -> Ofpacket.datapath_id -> Event.e -> unit  Lwt.t) -> unit
-val send_of_data : state -> Ofpacket.datapath_id -> Cstruct.buf  -> unit Lwt.t
-val terminate : state -> unit
+type t 
+val register_cb : t -> Event.t -> 
+  (t -> Ofpacket.datapath_id -> Event.e -> unit  Lwt.t) -> unit
+val send_of_data : t -> Ofpacket.datapath_id -> Cstruct.buf  -> unit Lwt.t
+val terminate : t -> unit
 val mem_dbg : string -> unit
 val listen : Net.Manager.t -> Net.Nettypes.ipv4_src -> 
-  (state -> 'a) -> unit Lwt.t
+  (t -> 'a) -> unit Lwt.t
 val connect : Net.Manager.t -> Net.Nettypes.ipv4_dst -> 
-  (state -> 'a) -> unit Lwt.t
+  (t -> 'a) -> unit Lwt.t
