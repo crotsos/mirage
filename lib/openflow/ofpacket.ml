@@ -1627,7 +1627,7 @@ module Flow_mod = struct
     let _ = set_ofp_flow_mod_out_port bits (Port.int_of_port m.out_port) in
     let _ = set_ofp_flow_mod_flags bits (marshal_flags m.flags) in 
     let bits = Cstruct.shift bits sizeof_ofp_flow_mod in 
-    let (_, bits) = marshal_and_shift (Flow.marshal_actions m.actions) bits in 
+    let _ = marshal_and_shift (Flow.marshal_actions m.actions) bits in  
       len
 
   let flow_mod_to_string t = 
@@ -1696,6 +1696,13 @@ module Flow_removed = struct
     packet_count:uint64;
     byte_count:uint64;
   }
+
+  let flow_to_flow_removed ?(reason=DELETE) ~duration_sec ~duration_nsec 
+        ~packet_count ~byte_count t = 
+    {of_match=t.Flow_mod.of_match; cookie=t.Flow_mod.cookie;
+     priority=t.Flow_mod.priority; reason; duration_sec; duration_nsec; 
+     idle_timeout=t.Flow_mod.idle_timeout; packet_count; byte_count; }
+
   let parse_flow_removed bits =
     let of_match = Match.parse_match bits in 
     let cookie = get_ofp_flow_removed_cookie bits in 
@@ -1709,6 +1716,22 @@ module Flow_removed = struct
     let _ =  Cstruct.shift bits sizeof_ofp_flow_removed  in 
       {of_match; cookie; priority; reason; duration_sec; duration_nsec; 
       idle_timeout; packet_count; byte_count;}
+
+  let marshal_flow_removed ?(xid=(Random.int32 Int32.max_int)) m bits =
+    let len = Header.sizeof_ofp_header + Match.sizeof_ofp_match + 
+              sizeof_ofp_flow_removed in
+    let header = Header.create Header.FLOW_REMOVED len xid in 
+    let (_, bits) = marshal_and_shift (Header.marshal_header header) bits in 
+    let (_, bits) = marshal_and_shift (Match.marshal_match m.of_match) bits in 
+    let _ = set_ofp_flow_removed_cookie bits m.cookie in 
+    let _ = set_ofp_flow_removed_priority bits m.priority in 
+    let _ = set_ofp_flow_removed_reason bits (int_of_reason m.reason) in 
+    let _ = set_ofp_flow_removed_duration_sec bits m.duration_sec in 
+    let _ = set_ofp_flow_removed_duration_nsec bits m.duration_nsec in 
+    let _ = set_ofp_flow_removed_idle_timeout bits m.idle_timeout in 
+    let _ = set_ofp_flow_removed_packet_count bits m.packet_count in 
+    let _ = set_ofp_flow_removed_byte_count bits m.byte_count in
+      len
 
   let string_of_flow_removed m = 
     sp "flow:%s cookie:%s priority:%d reason:%s duration:%s.%s ifle_timeout:%d packet:%s bytes:%s"   

@@ -1,6 +1,6 @@
 (*
  * Copyright (c) 2011 Richard Mortier <mort@cantab.net>
-                      Charalampos Rotsos <cr409@cl.cam.ac.uk> 
+ *                    Charalampos Rotsos <cr409@cl.cam.ac.uk> 
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -366,6 +366,11 @@ module Flow_removed :
       packet_count : uint64;
       byte_count : uint64;
     }
+    val parse_flow_removed: Cstruct.buf  -> t
+    val marshal_flow_removed: ?xid:int32 -> t -> Cstruct.buf -> int
+    val flow_to_flow_removed: ?reason:reason -> duration_sec:int32 -> 
+      duration_nsec:int32 -> packet_count:int64 -> byte_count:int64 ->
+      Flow_mod.t -> t
     val string_of_flow_removed : t -> string
   end
 module Port_mod :
