@@ -97,14 +97,16 @@ let host_inner host_id () =
         | 1 ->
           lwt _ = Manager.configure interface (`IPv4 (ip host_id)) in
           Printf.printf "%f: trying to connect server\n%!" (Clock.time ());
-            Datagram.UDPv4.recv mgr (None, port) echo_udp
+(*             Datagram.UDPv4.recv mgr (None, port) echo_udp *)
+          Net.Channel.listen mgr (`TCPv4 ((None, port), echo ))
         | 2 -> 
           let dst_ip = Nettypes.ipv4_addr_of_tuple (10l,0l,1l,1l) in  
           Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
           lwt _ = Manager.configure interface (`IPv4 (ip host_id)) in
           lwt _ = Time.sleep 1.0 in
           Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
-            echo_client_udp mgr (dst_ip,port)
+(*             echo_client_udp mgr (dst_ip,port) *)
+          Net.Channel.connect mgr (`TCPv4 (None, (dst_ip, port), echo_client ))
         | _ -> return (printf "Invalid node_id %d\n%!" host_id)
         )
     with e ->
