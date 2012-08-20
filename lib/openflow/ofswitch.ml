@@ -51,17 +51,17 @@ module Entry = struct
   }
 
   type flow_counter = {
-   mutable n_packets: uint64;
-   mutable n_bytes: uint64;
-
-   mutable priority: uint16;
-   mutable cookie: int64;
-   mutable insert_sec: uint32;
-   mutable insert_nsec: uint32;
-   mutable last_sec: uint32;
-   mutable last_nsec: uint32;
-   mutable idle_timeout: int;
-   mutable hard_timeout:int;
+    mutable n_packets: uint64;
+    mutable n_bytes: uint64;
+    flags : OP.Flow_mod.flags; 
+    priority: uint16;
+    cookie: int64;
+    insert_sec: uint32;
+    insert_nsec: uint32;
+    mutable last_sec: uint32;
+    mutable last_nsec: uint32;
+    idle_timeout: int;
+    hard_timeout:int;
   }
 
   type queue_counter = {
@@ -70,16 +70,12 @@ module Entry = struct
     tx_queue_overrun_errors: uint64;
   }
 
-  let init_flow_counters () =
-    {n_packets=(Int64.of_int 0);
-    n_bytes= (Int64.of_int 0);
-
-    priority= 0; cookie= (Int64.of_int 0); 
-    insert_sec=(Int32.of_float (OS.Clock.time()));
-    insert_nsec=0l;
-    last_sec=(Int32.of_float (OS.Clock.time())); 
-    last_nsec=0l;
-        idle_timeout=0; hard_timeout=0;}
+  let init_flow_counters t =
+    let ts = Int32.of_float (OS.Clock.time ()) in
+    {n_packets=0L; n_bytes=0L; priority=t.OP.Flow_mod.priority; 
+     cookie=t.OP.Flow_mod.cookie; insert_sec=ts; insert_nsec=0l; 
+     last_sec=ts;last_nsec=0l; idle_timeout=t.OP.Flow_mod.idle_timeout; 
+    hard_timeout=t.OP.Flow_mod.hard_timeout; flags=t.OP.Flow_mod.flags; }
 
 
   type t = { 
@@ -127,29 +123,63 @@ module Table = struct
       wildcards=OP.Wildcards.exact_match; max_entries=1024l; active_count=0l; 
       lookup_count=0L; matched_count=0L});}
 
-  let add_flow table tuple actions =
+  (* TODO fix flow_mod flag support. overlap is not considered *)
+  let add_flow table t =
     (* TODO check if the details are correct e.g. IP type etc. *)
-    Hashtbl.replace table.entries tuple
-    (Entry.({actions; counters=(init_flow_counters ()); cache_entries=[];}))
+    Hashtbl.replace table.entries t.OP.Flow_mod.of_match 
+    (Entry.({actions=t.OP.Flow_mod.actions; counters=(init_flow_counters t); 
+             cache_entries=[];}))
 
-  let del_flow table tuple out_port =
+  (* check if a list of actions has an output action forwarding packets to
+   * out_port *)
+  let rec is_output_port out_port = function
+    | [] -> false
+    | OP.Flow.Output(port, _)::_ when (port = out_port) -> true
+    | head::tail -> is_output_port out_port tail 
+
+  let del_flow table ?(xid=(Random.int32 Int32.max_int)) ?(reason=OP.Flow_removed.DELETE) 
+        t tuple out_port =
     (* Delete all matching entries from the flow table*)
     let remove_flow = 
       Hashtbl.fold (
         fun of_match flow ret -> 
-          if (OP.Match.flow_match_compare of_match tuple
-          tuple.OP.Match.wildcards) then ( 
+          if ((OP.Match.flow_match_compare of_match tuple
+                  tuple.OP.Match.wildcards) && 
+              ((out_port = OP.Port.No_port) || 
+               (is_output_port out_port flow.Entry.actions))) then ( 
             Hashtbl.remove table.entries of_match; 
-            ret @ [flow]
+            ret @ [(of_match, flow)]
           ) else 
             ret
           ) table.entries [] in
 
     (* Delete all entries from cache *)
-    Hashtbl.iter (fun of_match flow -> 
-      if (List.mem (!flow) remove_flow ) then 
-        Hashtbl.remove table.cache of_match
-      ) table.cache
+    let _ = 
+      List.iter (
+        fun (_, flow) -> 
+          List.iter (Hashtbl.remove table.cache) flow.Entry.cache_entries
+      ) remove_flow in 
+
+    (* Check for notification flag in flow and send 
+    * flow modification warnings *)
+    let _ = 
+      List.iter (
+      fun (of_match, flow) -> 
+        if (flow.Entry.counters.Entry.flags.OP.Flow_mod.send_flow_rem) then
+          let duration_sec = Int32.sub (Int32.of_float (OS.Clock.time ()))  
+            flow.Entry.counters.Entry.insert_sec in
+          let fl_rm = OP.Flow_removed.(
+            {of_match; cookie=flow.Entry.counters.Entry.cookie; 
+            priority=flow.Entry.counters.Entry.priority;
+            reason; duration_sec; duration_nsec=0l;
+            idle_timeout=flow.Entry.counters.Entry.idle_timeout;
+            packet_count=flow.Entry.counters.Entry.n_packets;
+            byte_count=flow.Entry.counters.Entry.n_bytes;}) in 
+          let bits = OP.marshal_and_sub (OP.Flow_removed.marshal_flow_removed fl_rm) 
+            (OS.Io_page.get ()) in 
+            Channel.write_buffer t bits  
+    ) remove_flow  in 
+      Channel.flush t
 
   let update_table_found table = 
     table.stats.OP.Stats.lookup_count <- Int64.add
@@ -160,6 +190,34 @@ module Table = struct
   let update_table_missed table =
     table.stats.OP.Stats.lookup_count <- Int64.add
     table.stats.OP.Stats.lookup_count 1L
+
+
+  let check_flow_timeout table t = 
+    let ts = (Int32.of_float (OS.Clock.time ())) in 
+    let flows = Hashtbl.fold (
+      fun of_match entry ret -> 
+        let hard = Int32.to_int (Int32.sub ts entry.Entry.counters.Entry.insert_sec) in
+        let idle = Int32.to_int (Int32.sub ts entry.Entry.counters.Entry.last_sec) in
+        match (hard, idle) with 
+          | (l, _) when ((entry.Entry.counters.Entry.hard_timeout > 0) && 
+                         (l >= entry.Entry.counters.Entry.hard_timeout)) ->
+              ret @ [(of_match, entry, OP.Flow_removed.HARD_TIMEOUT )]
+          | (_, l) when ((entry.Entry.counters.Entry.idle_timeout > 0) &&
+                         (l >= entry.Entry.counters.Entry.idle_timeout)) ->
+              ret @ [(of_match, entry, OP.Flow_removed.IDLE_TIMEOUT )]
+          | _ -> ret 
+    ) table.entries [] in 
+      Lwt_list.iter_s (
+        fun (of_match, entry, reason) -> 
+          del_flow table ~reason t of_match OP.Port.No_port 
+      ) flows
+
+
+  let monitor_flow_timeout table t = 
+    while_lwt true do 
+      lwt _ = OS.Time.sleep 1.0 in 
+        check_flow_timeout table t
+    done 
 end
 
 module Switch = struct
@@ -234,7 +292,7 @@ module Switch = struct
  let supported_actions () = 
    OP.Switch.({ output=true; set_vlan_id=true; set_vlan_pcp=true; strip_vlan=true;
    set_dl_src=true; set_dl_dst=true; set_nw_src=true; set_nw_dst=true;
-   set_nw_tos=true; set_tp_src=true; set_tp_dst=true; enqueue=true;vendor=true; })
+   set_nw_tos=true; set_tp_src=true; set_tp_dst=true; enqueue=false;vendor=true; })
  let supported_capabilities () = 
    OP.Switch.({flow_stats=true;table_stats=true;port_stats=true;stp=true;
    ip_reasm=false;queue_stats=false;arp_match_ip=true;})
@@ -396,8 +454,6 @@ module Switch = struct
     in 
       apply_of_actions_rec st in_port bits actions
 
-
-   let errornum = ref 1 
    let lookup_flow st of_match =
      (* Check first the match table cache *)
      if (Hashtbl.mem st.table.Table.cache of_match ) then (
@@ -405,25 +461,24 @@ module Switch = struct
        Found(entry) 
      ) else (
        (* Check the wilcard card table *)
-       let lookup_flow flow entry ret =
-         if (OP.Match.flow_match_compare of_match flow
-                flow.OP.Match.wildcards) then
-           ret @ [flow]
-         else
-           ret
+       let lookup_flow flow entry r =
+         match (r, (OP.Match.flow_match_compare of_match flow
+                  flow.OP.Match.wildcards)) with
+           | (_, false) -> r
+           | (None, true) -> Some(flow, entry)
+           | (Some(f,e), true) when (Entry.(e.counters.priority > entry.counters.priority)) -> r
+           | (Some(f,e), true) when (Entry.(e.counters.priority <= entry.counters.priority)) -> 
+                                     Some(flow, entry)
+           | (_, _) -> r
        in
-       let matches = Hashtbl.fold lookup_flow st.table.Table.entries [] in
-       if ((List.length matches) = 0) then 
-         NOT_FOUND
-         else (
-           (* TODO choose highest priority on the list instead of picking the 
-            * first entry *)
-           let flow_ref = Hashtbl.find st.table.Table.entries
-                            (List.hd matches) in 
-           Hashtbl.add st.table.Table.cache of_match (ref flow_ref);
-           Found((ref flow_ref))
-           )
-         )
+       let flow_match = Hashtbl.fold lookup_flow st.table.Table.entries None in
+         match (flow_match) with
+           | None ->  NOT_FOUND
+           | Some(f,e) ->
+               Hashtbl.add st.table.Table.cache of_match (ref e);
+               e.Entry.cache_entries <- e.Entry.cache_entries @ [of_match]; 
+               Found(ref e)
+     )
 end
 
 let netif_id_of_ethif d = 
@@ -686,15 +741,15 @@ let process_openflow st t bits =  function
     cp (sp "FLOW_MOD: %s\n%!" (OP.Flow_mod.flow_mod_to_string fm));
     let of_match = fm.OP.Flow_mod.of_match in 
     let of_actions = fm.OP.Flow_mod.actions in
-    let _ = 
+    lwt _ = 
       match (fm.OP.Flow_mod.command) with
       | OP.Flow_mod.ADD 
       | OP.Flow_mod.MODIFY 
       | OP.Flow_mod.MODIFY_STRICT -> 
-        Table.add_flow st.Switch.table of_match of_actions
+        return (Table.add_flow st.Switch.table fm)
       | OP.Flow_mod.DELETE 
       | OP.Flow_mod.DELETE_STRICT ->
-        Table.del_flow st.Switch.table of_match fm.OP.Flow_mod.out_port
+        Table.del_flow st.Switch.table t of_match fm.OP.Flow_mod.out_port
     in
       if (fm.OP.Flow_mod.buffer_id = -1l) then
         return () 
@@ -772,10 +827,10 @@ let control_channel st (remote_addr, remote_port) t =
     | OP.Unparsed (m, bs) -> (pr "# unparsed! m=%s\n %!" m); echo ()
     | exn -> 
         pr "[OpenFlow-Switch-Control] ERROR:%s\n" (Printexc.to_string exn);
-        echo () 
+        (echo () ) 
 
   in 
-    echo () 
+    echo () <&> (Table.monitor_flow_timeout st.Switch.table t)
 
 (*
  * Interaface with external applications
