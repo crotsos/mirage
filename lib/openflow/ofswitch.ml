@@ -116,6 +116,7 @@ module Table = struct
     mutable cache : (OP.Match.t, Entry.t ref) Hashtbl.t;
     stats : OP.Stats.table;
   }
+
   let init_table () = 
     { tid = 0_L; entries = (Hashtbl.create 10000); cache = (Hashtbl.create 10000);
     stats = OP.Stats.(
@@ -181,6 +182,7 @@ module Table = struct
     ) remove_flow  in 
       Channel.flush t
 
+  (* table stat update methods *)
   let update_table_found table = 
     table.stats.OP.Stats.lookup_count <- Int64.add
     table.stats.OP.Stats.lookup_count 1L;
@@ -191,7 +193,7 @@ module Table = struct
     table.stats.OP.Stats.lookup_count <- Int64.add
     table.stats.OP.Stats.lookup_count 1L
 
-
+  (* monitor thread to timeout flows *)
   let check_flow_timeout table t = 
     let ts = (Int32.of_float (OS.Clock.time ())) in 
     let flows = Hashtbl.fold (
@@ -455,7 +457,10 @@ module Switch = struct
       apply_of_actions_rec st in_port bits actions
 
    let lookup_flow st of_match =
-     (* Check first the match table cache *)
+     (* Check first the match table cache
+      * NOTE an exact match flow will be found on this step and thus 
+      * return a result immediately, without needing to get to the cache table
+      * and consider flow priorities *)
      if (Hashtbl.mem st.table.Table.cache of_match ) then (
        let entry = (Hashtbl.find st.table.Table.cache of_match) in
        Found(entry) 
