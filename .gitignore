@@ -24,3 +24,4 @@ CVS/
 doc/html/
 /screenlog.*
 tools/fs/*.o
+*.pcap
