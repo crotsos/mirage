@@ -176,6 +176,7 @@ let packet_in_cb controller dpid evt =
         OC.send_of_data controller dpid bs
   ) else (
     let out_port = (Hashtbl.find switch_data.mac_cache ix) in
+    let flags = OP.Flow_mod.({send_flow_rem=true; emerg=false; overlap=false;}) in 
     lwt _ = 
       if (buffer_id = -1l) then
         (* Need to send also the packet in cache the packet is not cached *)
@@ -183,7 +184,7 @@ let packet_in_cb controller dpid evt =
           OP.marshal_and_sub 
             ( OP.Packet_out.marshal_packet_out  
                 (OP.Packet_out.create
-                   ~buffer_id:buffer_id 
+                   ~buffer_id:buffer_id    
                    ~actions:[ OP.(Flow.Output(out_port, 2000))] 
                    ~data:data ~in_port:in_port () )) (OS.Io_page.get ()) in   
           OC.send_of_data controller dpid bs      
@@ -193,8 +194,8 @@ let packet_in_cb controller dpid evt =
     let pkt = 
       OP.marshal_and_sub 
         ( OP.Flow_mod.marshal_flow_mod 
-            (OP.Flow_mod.create m 0_L OP.Flow_mod.ADD 
-                ~buffer_id:(Int32.to_int buffer_id)
+            (OP.Flow_mod.create m 0_L OP.Flow_mod.ADD ~hard_timeout:10 
+                ~buffer_id:(Int32.to_int buffer_id)  ~flags
                  [OP.Flow.Output(out_port, 2000)] ()))
         (OS.Io_page.get ()) in
       OC.send_of_data controller dpid pkt
