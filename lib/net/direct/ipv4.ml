@@ -124,6 +124,13 @@ let writev t ~header bufs =
   adjust_output_header ~tlen header;
   Ethif.writev t.ethif (header::bufs)
  
+cstruct tcpv4 {
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint32_t sequence;
+  uint32_t ack_number
+} as big_endian
+
 let input t buf =
   (* buf pointers to to start of IPv4 header here *)
   let ihl = (get_ipv4_hlen_version buf land 0xf) * 4 in

@@ -130,6 +130,11 @@ module Rx = struct
         let ack = Wire.get_ack pkt in
         let window = Wire.get_tcpv4_window pkt in
         let data = Wire.get_payload pkt in
+(*
+        let Some(node_name) = (Lwt.get OS.Topology.node_name) in 
+        let _ = Printf.printf "Read a packet from thread %s (seq:%ld)\n%!" 
+                  node_name (Sequence.to_int32 ack_number) in
+ *)
         let seg = Segment.Rx.make ~sequence ~fin ~syn ~ack ~ack_number ~window ~data in
         let {rxq} = pcb in
         (* Coalesce any outstanding segments and retrieve ready segments *)
@@ -360,7 +365,9 @@ let input_no_pcb t pkt id =
           | false -> begin
             match (hashtbl_find t.listeners id.local_port) with
             | Some (_, pushf) -> begin
-              let tx_isn = Sequence.of_int ((Random.int 65535) + 0xCAFE0000) in
+(*               let tx_isn = Sequence.of_int ((Random.int 65535) + 0xCAFE000)
+ *               in *)
+              let tx_isn = Sequence.of_int 0 in
 	      let tx_wnd = Wire.get_tcpv4_window pkt in
 	      (* TODO: make this configurable per listener *)
 	      let rx_wnd = 65535 in
@@ -500,7 +507,8 @@ let rec connecttimer t id tx_isn options window count =
 
 let connect t ~dest_ip ~dest_port = 
   let id = getid t dest_ip dest_port in
-  let tx_isn = Sequence.of_int ((Random.int 65535) + 0xABCD0000) in
+(*   let tx_isn = Sequence.of_int ((Random.int 65535) + 0xABCD000) in *)
+  let tx_isn = Sequence.of_int 0 in 
   (* TODO: This is hardcoded for now - make it configurable *)
   let rx_wnd_scaleoffer = wscale_default in
   let options = Options.MSS 1460 :: Options.Window_size_shift rx_wnd_scaleoffer :: [] in
