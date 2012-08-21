@@ -201,6 +201,7 @@ module Make(Flow:FLOW) :
     let l = List.rev t.obufq in
     t.obufq <- [];
     Lwt_list.iter_p (Flow.write t.flow) l
+ (*   Flow.writev t.flow l *)
  
   let close t =
     flush t >>

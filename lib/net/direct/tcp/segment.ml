@@ -18,6 +18,13 @@ open Printf
 open Lwt
 open State
 
+let peek_opt_l seq =
+  match Lwt_sequence.take_opt_l seq with
+  |None -> None
+  |Some s ->
+     let _ = Lwt_sequence.add_l s seq in
+     Some s
+
 (* The receive queue stores out-of-order segments, and can
    coalesece them on input and pass on an ordered list up the
    stack to the application.
@@ -215,7 +222,7 @@ module Tx = struct
   let ontimer xmit st segs wnd seq =
     match state st with
     | Syn_rcvd _ | Established | Fin_wait_1 _ | Close_wait | Last_ack _ -> begin
-	match Lwt_sequence.peek_opt_l segs with 
+	match peek_opt_l segs with 
 	| None ->
             Tcptimer.Stoptimer
 	| Some rexmit_seg ->
@@ -246,6 +253,13 @@ module Tx = struct
         Tcptimer.Stoptimer
 
 
+  let peek_l seq =
+    match Lwt_sequence.take_opt_l seq with
+    |None -> assert false
+    |Some s ->
+      let _ = Lwt_sequence.add_l s seq in
+      s
+
   let rto_t q tx_ack =
     (* Listen for incoming TX acks from the receive queue and ACK
        segments in our retransmission queue *)
@@ -255,7 +269,7 @@ module Tx = struct
           q.dup_acks <- q.dup_acks + 1;
           if 3 = q.dup_acks then begin
             (* retransmit the bottom of the unacked list of packets *)
-            let rexmit_seg = Lwt_sequence.peek_l q.segs in
+            let rexmit_seg = peek_l q.segs in
             (* printf "TCP fast retransmission seq = %d, dupack = %d\n%!"
                     (Sequence.to_int rexmit_seg.seq) (Sequence.to_int seq); *)
             let {wnd} = q in
@@ -294,7 +308,7 @@ module Tx = struct
       lwt (seq, win) = Lwt_mvar.take tx_ack in
       let ack_len = Sequence.sub seq (Window.tx_una q.wnd) in
       let dupacktest () = ((0l = (Sequence.to_int32 ack_len)) &&
-                           ((Window.tx_wnd q.wnd) = (Int32.of_int win)) &&
+                           ((Window.tx_wnd_unscaled q.wnd) = (Int32.of_int win)) &&
                            (not (Lwt_sequence.is_empty q.segs)))
       in
       serviceack (dupacktest ()) ack_len seq win;

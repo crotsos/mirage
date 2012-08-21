@@ -64,9 +64,6 @@ let prettyprint t =
      )
   ) t.cache
 
-let add_static_entry t ip mac = 
-  Hashtbl.replace t.cache ip (Verified mac)
-
 (* Input handler for an ARP packet, registered through attach() *)
 let rec input t frame =
   match get_arp_op frame with

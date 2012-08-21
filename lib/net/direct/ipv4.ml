@@ -182,11 +182,11 @@ let set_netmask t netmask =
   t.netmask <- netmask;
   return ()
 
-let get_netmask t =
-  t.netmask
-
 let set_gateways t gateways =
   t.gateways <- gateways;
   return ()
 
 let mac t = Ethif.mac t.ethif
+
+let get_netmask t =
+  t.netmask
