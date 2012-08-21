@@ -282,8 +282,8 @@ module Switch = struct
     p_sflow: uint32; (** probability for sFlow sampling *)
     mutable errornum : uint32; 
     mutable portnum : int;
-    packet_queue : (Cstruct.buf * int ) Lwt_stream.t;
-    push_packet : ((Cstruct.buf * int ) option -> unit);
+    packet_queue : (Cstruct.buf * Net.Ethif.t) Lwt_stream.t;
+    push_packet : ((Cstruct.buf * Net.Ethif.t) option -> unit);
     (* TODO: add this in the port definition and make also 
      * packet output assyncronous *) 
     mutable queue_len : int;
@@ -493,23 +493,13 @@ let netif_id_of_ethif d =
  * Switch OpenFlow data plane 
  *********************************************)
 
-let process_frame st intf_name frame =
-  try_lwt 
-    let p = Hashtbl.find st.Switch.dev_to_port (netif_id_of_ethif intf_name) in
-    if (st.Switch.queue_len < 256) then (
-      st.Switch.queue_len <- st.Switch.queue_len + 1;
-      return(st.Switch.push_packet (Some(frame, ((!p).Switch.port_id) )))
-    ) else (
-      return ()
-    )
-    with Not_found -> 
-      return (pr "Invalid port %s\n%!" (netif_id_of_ethif intf_name))
 
 (* 
  * let process_frame_depr intf_name frame =  *)
 let process_frame_inner st intf frame =
   try_lwt 
-     let p = (!(Hashtbl.find st.Switch.dev_to_port (netif_id_of_ethif intf))) in 
+      let p = (!(Hashtbl.find st.Switch.dev_to_port (netif_id_of_ethif intf)))
+      in  
      let in_port = (OP.Port.port_of_int p.Switch.port_id) in 
      let tupple = (OP.Match.raw_packet_to_match in_port frame ) in
      (* Update port rx statistics *)
@@ -558,18 +548,32 @@ let process_frame_inner st intf frame =
           frame (!entry).Entry.actions
     with Not_found ->
       pr "bt: %s\n%!" (Printexc.get_backtrace ());
-      return (pr "Port %s not found\n%!" (netif_id_of_ethif intf))
+      return ()
      | Packet_type_unknw -> return ()
+
+let process_frame st intf_name frame =
+  try_lwt 
+    let p = Hashtbl.find st.Switch.dev_to_port (netif_id_of_ethif intf_name) in
+    process_frame_inner st intf_name frame
+(*    if (st.Switch.queue_len < 256) then (
+      st.Switch.queue_len <- st.Switch.queue_len + 1;
+
+      return(st.Switch.push_packet (Some(frame, ((!p).Switch.port_id) )))
+    ) else (
+      pr "dropping packet at the switch\n%!";
+      return ()
+    ) *)
+    with Not_found -> 
+      return (pr "Invalid port %s\n%!" (netif_id_of_ethif intf_name)) 
 
 let data_plane st () = 
   try_lwt 
   while_lwt true do 
     lwt a = Lwt_stream.get st.Switch.packet_queue in
     match a with
-    | Some (pkt, port) ->
-      let p = !(Hashtbl.find st.Switch.int_to_port port) in 
+    | Some (pkt, p) ->
       st.Switch.queue_len <- st.Switch.queue_len - 1;
-      process_frame_inner st p.Switch.ethif pkt
+      process_frame_inner st p pkt
     | None -> return ()
   done
 
