@@ -286,6 +286,7 @@ ocaml_ns3_add_node(value ocaml_name)
   node.Create(1);
   // add in the last hashmap
   nodes[name] = node.Get(0);
+  Names::Add(name, node.Get(0));
 
   // register handlers in case a new network device is added
   // on the node
@@ -314,8 +315,9 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
 
   //capture pcap trace
-  string filename = string("ns3-")+node_a+string("-")+node_b;
-  csma.EnablePcapAll (filename, false);
+//  string filename = string("ns3");
+  csma.EnablePcap("ns3", link.Get(0), true);
+  csma.EnablePcap("ns3", link.Get(1), true);
 
   CAMLreturn ( Val_unit );
 }
@@ -339,6 +341,7 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
   node_intf.Create(1);
   // add in the last hashmap
   nodes[intf] = node_intf.Get(0);
+  Names::Add(node, node_intf.Get(0));
 
   // create a single node to appear as the tap intereface
   NodeContainer csma_nodes;
