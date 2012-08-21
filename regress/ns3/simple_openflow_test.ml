@@ -37,10 +37,12 @@ let rec echo dst chan =
     lwt _ =
       while_lwt true do
         lwt buf = Channel.read_some chan in
+(*
          return (Printf.printf "%f: read %d\n%!" 
          (Clock.time ())
          (Cstruct.len buf)) 
-(*         return () *)
+ *)
+          return () 
       done
     in
       return ()
@@ -196,8 +198,8 @@ let packet_in_cb controller dpid evt =
     let pkt = 
       OP.marshal_and_sub 
         ( OP.Flow_mod.marshal_flow_mod 
-            (OP.Flow_mod.create m 0_L OP.Flow_mod.ADD ~hard_timeout:10 
-                ~buffer_id:(Int32.to_int buffer_id)  ~flags
+            (OP.Flow_mod.create m 0_L OP.Flow_mod.ADD ~hard_timeout:0 
+                 ~idle_timeout:0 ~buffer_id:(Int32.to_int buffer_id)  ~flags
                  [OP.Flow.Output(out_port, 2000)] ()))
         (OS.Io_page.get ()) in
       OC.send_of_data controller dpid pkt
