@@ -165,7 +165,14 @@ module Rx = struct
           Lwt_mvar.put q.rx_data (None, Some 0)
          end else return ())
       in
-      tx_ack <&> urx_inform
+      lwt _ = tx_ack <&> urx_inform in
+      let _ = 
+        if ((Sequence.to_int32 seg.ack_number) > 1l) then
+          let Some(node_name) = (Lwt.get OS.Topology.node_name) in 
+            Printf.printf "%03.6f: TCP packet - thread %s (seq:%ld)\n%!" 
+              (OS.Clock.time ()) node_name (Sequence.to_int32 seg.ack_number)
+      in
+        return ()
     end
 
 end
@@ -306,6 +313,10 @@ module Tx = struct
           Window.tx_ack q.wnd (Sequence.sub seq (Sequence.of_int32 partleft)) win
       in
       lwt (seq, win) = Lwt_mvar.take tx_ack in
+      let _ = 
+        if ((Sequence.to_int32 seq) > 1l ) then
+          printf "%03.6f: acking %ld bytes\n%!"  (OS.Clock.time ()) (Sequence.to_int32 seq)
+      in 
       let ack_len = Sequence.sub seq (Window.tx_una q.wnd) in
       let dupacktest () = ((0l = (Sequence.to_int32 ack_len)) &&
                            ((Window.tx_wnd_unscaled q.wnd) = (Int32.of_int win)) &&
