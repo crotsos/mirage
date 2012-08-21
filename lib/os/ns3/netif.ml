@@ -44,6 +44,7 @@ let ethernet_mac_to_string x =
 
 let plug node_name id mac =
  let active = true in
+   printf "Plugging in device %d \n%!" id; 
  let (fd, fd_push) = Lwt_stream.create () in
  let read_block = Lwt_condition.create () in
  let t = { id=(string_of_int id); fd; fd_push;
@@ -111,13 +112,45 @@ let create fn =
     with Not_found ->
       return ()
 
+cstruct ethernet {
+  uint8_t        dst[12];
+  uint16_t       ethertype
+} as big_endian
+
+cstruct ipv4 {
+  uint8_t       hlen_version
+} as big_endian
+
+cstruct tcpv4 {
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint32_t sequence;
+  uint32_t ack_number
+} as big_endian
+
 (* Input a frame, and block if nothing is available *)
 let rec input t =
-(*   let Some(node_name) = (Lwt.get Topology.node_name) in *)
+  let Some(node_name) = (Lwt.get Topology.node_name) in 
   try_lwt 
 (*     Gc.compact();    *)
     lwt Some((len, page)) = Lwt_stream.get t.fd in
-(*   Printf.printf "Read a packet from thread %s\n%!" node_name; *)
+    let _ = 
+      if ( 
+(*         (node_name = "node2") &&  *)
+           ((get_ethernet_ethertype page) = 0x0800)) then ( 
+        let bits = Cstruct.shift page sizeof_ethernet in 
+        let ip_len = ((get_ipv4_hlen_version bits) land 0xF) in
+        let bits = Cstruct.shift bits (4*ip_len) in 
+        if ((get_tcpv4_ack_number bits) > 1l) then
+          let Some(node_name) = (Lwt.get Topology.node_name) in 
+            Printf.printf "%03.6f: NETIF packet - thread %s (seq:%ld)\n%!" 
+              (Clock.time ()) node_name (get_tcpv4_ack_number bits)
+(*
+        Printf.printf "Read a packet from thread %s (seq:%ld)\n%!" 
+          node_name (get_tcpv4_ack_number bits);
+ *)
+      )
+    in
       return (page)
   with e ->
     Printf.printf "input error: %s\n%!" (Printexc.to_string e);
@@ -178,7 +211,10 @@ let write t page =
         wait_for_queue t
     in
   lwt _ = wait_for_queue t in
-    let _ = pkt_write node_name (int_of_string t.id) page off len in
+  
+(*   Cstruct.hexdump page;  *)
+(*   printf "off=%d, len=%d\n%!" off len;  *)
+  let _ = pkt_write node_name (int_of_string t.id) page off len in
     Gc.compact() ; 
     return ()
 
