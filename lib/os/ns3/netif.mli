@@ -16,14 +16,15 @@
 
 type id = string
 
-type t = {
+type t  = {
   id: id;
-  fd: (int * Io_page.t) Lwt_stream.t;
-  fd_push : ((int * Io_page.t) option -> unit);
+(*   fd: (int * Io_page.t) Lwt_stream.t; *)
+  fd_push : (int * Io_page.t) Lwt_condition.t;
+  fd_notify : unit Lwt_condition.t;
   read_block: unit Lwt_condition.t;
   mutable active: bool;
   mac: string;
-}
+} 
 
 val listen : t -> (Io_page.t -> unit Lwt.t) -> unit Lwt.t
 val destroy : t -> unit Lwt.t
@@ -32,7 +33,7 @@ val write : t -> Io_page.t -> unit Lwt.t
 val writev : t -> Io_page.t list -> unit Lwt.t
 
 val create : (id -> t -> unit Lwt.t) -> unit Lwt.t
-val get_writebuf : t -> Io_page.t Lwt.t
+val get_writebuf: t -> Io_page.t Lwt.t
 
 val mac : t -> string 
 val ethid : t -> id

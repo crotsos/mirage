@@ -19,11 +19,12 @@ open Printf
 open Gc
 
 type id = string
+let resolve t = Lwt.on_success t (fun _ -> ())
 
 type t = {
   id: id;
-  fd: (int * Io_page.t) Lwt_stream.t;
-  fd_push : ((int * Io_page.t) option -> unit);
+  fd_push : (int * Io_page.t) Lwt_condition.t;
+  fd_notify: unit Lwt_condition.t;
   read_block: unit Lwt_condition.t;
   mutable active: bool;
   mac: string;
@@ -45,9 +46,10 @@ let ethernet_mac_to_string x =
 let plug node_name id mac =
  let active = true in
    printf "Plugging in device %d \n%!" id; 
- let (fd, fd_push) = Lwt_stream.create () in
+ let fd_push = Lwt_condition.create () in
+ let fd_notify = Lwt_condition.create  () in 
  let read_block = Lwt_condition.create () in
- let t = { id=(string_of_int id); fd; fd_push;
+ let t = { id=(string_of_int id); fd_push; fd_notify;
            active; read_block; mac } in
  let _ = 
    if (Hashtbl.mem devices node_name) then (
@@ -64,24 +66,32 @@ let _ = Callback.register "plug_dev" plug
 let _ = Callback.register "get_frame" Io_page.get
 
 let demux_pkt node_name dev_id frame = 
-(*   Lwt.wakeup_paused (); *)
-  try_lwt
+  try
     let devs = Hashtbl.find devices node_name in 
-      Lwt_list.iter_p
-      (fun dev -> 
-        if (dev.id = (string_of_int dev_id)) then
-          let pkt = Io_page.get () in 
-          let pkt_len = (String.length frame) in
-          let _ = (Cstruct.set_buffer frame 0 pkt 0 pkt_len) in
-          return (dev.fd_push (Some((pkt_len, pkt))))
-        else return ()
-      ) devs 
+    let _ = List.iter
+              (fun dev -> 
+                 if (dev.id = (string_of_int dev_id)) then
+                   let pkt = Io_page.get () in 
+                   let pkt_len = (String.length frame) in
+                   let _ = (Cstruct.set_buffer frame 0 pkt 0 pkt_len) in
+                   let _ = Lwt_condition.signal dev.fd_push (pkt_len, pkt) in
+                   let _ = resolve (Lwt_condition.wait dev.fd_notify) in
+                     ()
+              ) devs 
+    in
+    let _ = Lwt.wakeup_all () in
+    let _ = Lwt.wakeup_all () in
+    let _ = Lwt.wakeup_all () in
+    let _ = Lwt.wakeup_all () in
+    let _ = Lwt.wakeup_all () in
+    let _ = Lwt.wakeup_all () in
+      ()
 (*       Printf.printf "packet_demux 7\n%!" *)
   with 
   | Not_found ->
-    return (Printf.printf "Packet cannot be processed for node %s\n" node_name)
+    Printf.printf "Packet cannot be processed for node %s\n" node_name
   | ex ->
-    return (printf "Error %s\n" (Printexc.to_string ex))
+    printf "Error %s\n" (Printexc.to_string ex)
 let _ = Callback.register "demux_pkt" demux_pkt
 
 
@@ -128,53 +138,45 @@ cstruct tcpv4 {
   uint32_t ack_number
 } as big_endian
 
-(* Input a frame, and block if nothing is available *)
-let rec input t =
-  let Some(node_name) = (Lwt.get Topology.node_name) in 
-  try_lwt 
-(*     Gc.compact();    *)
-    lwt Some((len, page)) = Lwt_stream.get t.fd in
-    let _ = 
-      if ( 
-(*         (node_name = "node2") &&  *)
-           ((get_ethernet_ethertype page) = 0x0800)) then ( 
-        let bits = Cstruct.shift page sizeof_ethernet in 
-        let ip_len = ((get_ipv4_hlen_version bits) land 0xF) in
-        let bits = Cstruct.shift bits (4*ip_len) in 
-        if ((get_tcpv4_ack_number bits) > 1l) then
-          let Some(node_name) = (Lwt.get Topology.node_name) in 
-            Printf.printf "%03.6f: NETIF packet - thread %s (seq:%ld)\n%!" 
-              (Clock.time ()) node_name (get_tcpv4_ack_number bits)
-(*
-        Printf.printf "Read a packet from thread %s (seq:%ld)\n%!" 
-          node_name (get_tcpv4_ack_number bits);
- *)
-      )
-    in
-      return (page)
-  with e ->
-    Printf.printf "input error: %s\n%!" (Printexc.to_string e);
-    failwith "Netif.input error" 
 
-(* Get write buffer for Netif output *)
 let get_writebuf t =
   let page = Io_page.get () in
-  (* TODO: record statistics for requesting thread here (in debug mode?) *)
-  return page
+    (* TODO: record statistics for requesting thread here (in debug mode?)
+     * *)
+    return page
+
 
 (* Loop and listen for packets permanently *)
 let rec listen t fn =
   match t.active with
   |true ->
-    lwt frame = input t in
-    Lwt.ignore_result (
+    let Some(node_name) = (Lwt.get Topology.node_name) in
+    let _ = 
+      if (node_name = "node2") then 
+(*       printf "%03.6f: asking packet\n%!" (Clock.time ()) *)
+    in
+(*     lwt frame = input t in *)
+    lwt (len, frame) = Lwt_condition.wait t.fd_push in
+(*
+    let _ = 
+      if (node_name = "node2") then 
+      printf "%03.6f: received packet\n%!" (Clock.time ())
+    in
+ *)
+    lwt _ = 
       try_lwt 
-        fn frame
+        lwt _ = fn frame in
+        let _ = Lwt_condition.signal t.fd_notify in
+          return ()
       with exn ->
         return (printf "EXN: %s bt: %s\n%!" (Printexc.to_string exn) 
                   (Printexc.get_backtrace()))
-    );
-    listen t fn
+    in
+(*    let _ = 
+      if (node_name = "node2") then 
+      printf "%03.6f: request next packet\n%!" (Clock.time ())
+    in *)
+      listen t fn
   |false ->
     return ()
 
@@ -205,9 +207,11 @@ let write t page =
   let rec wait_for_queue t = 
     match (queue_check node_name (int_of_string t.id)) with
     | true -> return ()
-    | false -> 
+    | false ->
+      let _ = printf "%03.6f: traffic blocked %s\n%!" (Clock.time ()) node_name in 
       let _ = register_check_queue node_name (int_of_string t.id) in
       lwt _ = Lwt_condition.wait t.read_block in
+      let _ = printf "%03.6f: traffic unblocked %s\n%!" (Clock.time ()) node_name in 
         wait_for_queue t
     in
   lwt _ = wait_for_queue t in
