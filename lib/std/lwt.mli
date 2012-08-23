@@ -233,6 +233,8 @@ val wakeup_exn : 'a u -> exn -> unit
   (** [wakeup_exn t e] makes the sleeping thread [t] fail with the
       exception [e]. *)
 
+val wakeup_all: unit -> unit 
+
 val wakeup_later : 'a u -> 'a -> unit
   (** Same as {!wakeup} but it is not guaranteed that the thread will
       be wakeup immediately. *)
