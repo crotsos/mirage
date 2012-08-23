@@ -134,10 +134,10 @@ TimerEventHandler(int id) {
 CAMLprim value 
 ocaml_ns3_add_timer_event(value p_ts, value p_id) {
   CAMLparam2(p_ts, p_id);
-  double ts = Double_val(p_ts);
+  double ts = (Double_val(p_ts) * 1e6);
   int id = Int_val(p_id);
 
-  EventId ev = Simulator::Schedule(Seconds (ts), &TimerEventHandler, id );
+  EventId ev = Simulator::Schedule(MicroSeconds (ts), &TimerEventHandler, id );
   CAMLreturn( Val_unit );
 }
 
@@ -184,13 +184,23 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto,
   // find host name
   string node_name = getHostName(dev);
 
+//  if (node_name == string("node2")) {
+//    printf("%03.6f: YYYYYYYYYYYYYYYYYYY in pkt receive %s\n", 
+//        (double)(Simulator::Now().GetMicroSeconds()/1e6), node_name.c_str());
+//    fflush(stdout);
+//  }
+
   //printf("node %s.%d packet\n", node_name.c_str(), dev->GetIfIndex());
   // call packet handling code in caml
-  caml_callback3(*caml_named_value("demux_pkt"), 
+  caml_callback3(*caml_named_value("demux_pkt"),
       caml_copy_string((const char *)node_name.c_str()),
       Val_int(dev->GetIfIndex()), ml_data );
   caml_remove_global_root(&ml_data);
-//  printf("packet demux end...\n");
+//  if (node_name == string("node2")) {
+//    printf("%03.6f: YYYYYYYYYYYYYYYYYYY out pkt receive %s\n", 
+//        (double)(Simulator::Now().GetMicroSeconds()/1e6), node_name.c_str());
+//    fflush(stdout);
+//  }
   return true;
 }
 
@@ -253,12 +263,17 @@ caml_queue_check(value v_name,  value v_id) {
 static void
 NetQueueCheckHandler(string name, int ifIx) {
   if(check_queue_size(name,ifIx)) {
+//    printf("%03.6f: ______________ port unblocked %s\n", 
+//        ((long)Simulator::Now().GetMicroSeconds()/1e6),
+//        name.c_str());
     caml_callback2(*caml_named_value("unblock_device"),
         caml_copy_string((const char *)name.c_str()),
         Val_int(ifIx));
   } else {
-    Time ts = MicroSeconds(Simulator::Now().GetMicroSeconds() + 1);
-    Simulator::Schedule(ts, &NetQueueCheckHandler, name, ifIx);
+//    printf("%03.6f: ______________ port blocked %s\n", 
+//        ((long)Simulator::Now().GetMicroSeconds()/1e6),
+//        name.c_str());
+    Simulator::Schedule(MicroSeconds(100), &NetQueueCheckHandler, name, ifIx);
   }
 }
 
@@ -267,8 +282,11 @@ caml_register_check_queue(value v_name,  value v_id) {
   CAMLparam2(v_name, v_id);
   string name =  string(String_val(v_name));
   int ifIx = Int_val(v_id);
-  Time ts = MicroSeconds(Simulator::Now().GetMicroSeconds() + 1);
-  Simulator::Schedule(ts, &NetQueueCheckHandler, name, ifIx);
+//  printf("%03.6f: ______________ port blocked %s\n", 
+//      ((long)Simulator::Now().GetMicroSeconds()/1e6),
+//      name.c_str());
+  Time ts = MicroSeconds(100);
+  Simulator::Schedule(MicroSeconds(100), &NetQueueCheckHandler, name, ifIx);
   CAMLreturn(Val_unit);
 }
 
@@ -315,7 +333,6 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
 
   //capture pcap trace
-//  string filename = string("ns3");
   csma.EnablePcap("ns3", link.Get(0), true);
   csma.EnablePcap("ns3", link.Get(1), true);
 
