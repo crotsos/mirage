@@ -16,21 +16,6 @@
 
 open State
 
-module Rx :
-  sig
-    type seg
-    val make: sequence:Sequence.t -> fin:bool -> syn:bool -> ack:bool ->
-      ack_number:Sequence.t -> window:int -> data:OS.Io_page.t -> seg
-
-    type q
-    val q : rx_data:(OS.Io_page.t list option * int option) Lwt_mvar.t ->
-      wnd:Window.t -> state:State.t ->
-      tx_ack:(Sequence.t * int) Lwt_mvar.t -> q
-    val to_string : q -> string
-    val is_empty : q -> bool
-    val input : q -> seg -> unit Lwt.t
-  end
-
 (* Pre-transmission queue *)
 module Tx :
   sig
@@ -44,9 +29,27 @@ module Tx :
 
     val q : xmit:xmit -> wnd:Window.t -> state:State.t ->
       rx_ack:Sequence.t Lwt_mvar.t ->
-      tx_ack:(Sequence.t * int) Lwt_mvar.t ->
-      tx_wnd_update:int Lwt_mvar.t -> q * unit Lwt.t
+      tx_ack:(Sequence.t * int) Lwt_mvar.t 
+      (* tx_wnd_update:int Lwt_mvar.t*) -> q * unit Lwt.t
 
     val output : ?flags:flags -> ?options:Options.ts -> q -> OS.Io_page.t list -> unit Lwt.t
    
   end
+
+module Rx :
+  sig
+    type seg
+    val make: sequence:Sequence.t -> fin:bool -> syn:bool -> ack:bool ->
+      ack_number:Sequence.t -> window:int -> data:OS.Io_page.t -> seg
+
+    type q
+    val q : rx_data:(OS.Io_page.t list option * int option) Lwt_mvar.t ->
+      wnd:Window.t -> state:State.t ->
+      tx_q:Tx.q -> 
+      utx:(int -> unit Lwt.t)->
+      (* tx_ack:(Sequence.t * int) Lwt_mvar.t ->*) q
+    val to_string : q -> string
+    val is_empty : q -> bool
+    val input : q -> seg -> unit Lwt.t
+  end
+

@@ -184,6 +184,10 @@ module Wnd = struct
        and tell the application that new space is available when it is blocked *)
     let rec tx_window_t () =
       lwt tx_wnd = Lwt_mvar.take tx_wnd_update in
+      let Some(node_name) = (Lwt.get OS.Topology.node_name) in
+      let _ = 
+        if (node_name = "node2") then 
+          Printf.printf "updating the window %d\n%!" tx_wnd in
       User_buffer.Tx.free utx tx_wnd >>
       tx_window_t ()
     in
@@ -244,20 +248,23 @@ let new_pcb t ~rx_wnd ~rx_wnd_scale ~tx_wnd ~tx_wnd_scale ~sequence ~tx_mss ~tx_
   (* Set up transmit and receive queues *)
   let on_close () = clearpcb t id tx_isn in
   let state = State.t ~on_close in
-  let txq, tx_t = Segment.Tx.q ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state ~rx_ack ~tx_ack ~tx_wnd_update in
+  let txq, tx_t = Segment.Tx.q ~xmit:(Tx.xmit_pcb t.ip id) ~wnd ~state ~rx_ack ~tx_ack 
+                     (* ~tx_wnd_update *) in
   (* The user application transmit buffer *)
   let utx = User_buffer.Tx.create ~wnd ~txq ~max_size:16384l in
-  let rxq = Segment.Rx.q ~rx_data ~wnd ~state ~tx_ack in
+  let rxq = Segment.Rx.q ~rx_data ~wnd ~state ~tx_q:txq 
+              ~utx:(User_buffer.Tx.free utx) (* ~tx_ack *) in
   (* Set up ACK module *)
   let ack = Ack.Delayed.t ~send_ack ~last:(Sequence.incr rx_isn) in
   (* Construct basic PCB in Syn_received state *)
-  let pcb = { state; rxq; txq; wnd; id; ack; urx; urx_close_t; urx_close_u; utx } in
+  let pcb = { state; rxq; txq; wnd; id; ack; urx; urx_close_t; urx_close_u; 
+               utx; } in
   (* Compose the overall thread from the various tx/rx threads
      and the main listener function *)
   let th =
     (Tx.thread t pcb ~send_ack ~rx_ack) <?>
-    (Rx.thread pcb ~rx_data) <?>
-    (Wnd.thread ~utx ~urx ~wnd ~tx_wnd_update)
+    (Rx.thread pcb ~rx_data) (* <?>
+    (Wnd.thread ~utx ~urx ~wnd ~tx_wnd_update) *)
   in
   pcb_allocs := !pcb_allocs + 1;
   th_allocs := !th_allocs + 1;

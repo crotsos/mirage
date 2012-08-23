@@ -39,7 +39,7 @@ module Rx = struct
     let readers = Lwt_sequence.create () in
     let watcher = None in
     let cur_size = 0l in
-    { q; wnd; writers; readers; max_size; cur_size; watcher }
+    { q; wnd; writers; readers; max_size; cur_size; watcher; }
   
   let notify_size_watcher t =
     let rx_wnd = max 0l (Int32.sub t.max_size t.cur_size) in
@@ -115,13 +115,14 @@ module Tx = struct
     buffer: OS.Io_page.t Lwt_sequence.t;
     max_size: int32;
     mutable bufbytes: int32;
+    mutable free_id: int;
   }
 
   let create ~max_size ~wnd ~txq = 
     let buffer = Lwt_sequence.create () in
     let writers = Lwt_sequence.create () in
     let bufbytes = 0l in
-    { wnd; writers; txq; buffer; max_size; bufbytes }
+    { wnd; writers; txq; buffer; max_size; bufbytes;  free_id=0; }
 
   let len data = 
     Int32.of_int (Cstruct.len data)
@@ -152,8 +153,10 @@ module Tx = struct
       let th,u = Lwt.task () in
       let node = Lwt_sequence.add_r u t.writers in
       Lwt.on_cancel th (fun _ -> Lwt_sequence.remove node);
-      th >>
-      wait_for t sz
+(*       let _ = printf "%03.6ff: ------> Ask buf\n%!" (OS.Clock.time ()) in  *)
+      lwt _ = th in 
+(*       let _ = printf "%03.6ff: ------> ret buf\n%!" (OS.Clock.time ()) in  *)
+        wait_for t sz
     end
 
   (* Wait until the user buffer is flushed *)
@@ -285,19 +288,20 @@ module Tx = struct
             transmit_segments ~mss:max_size ~txq:t.txq datav
 
 
-  let inform_app t = 
+  let inform_app t free_id = 
     match Lwt_sequence.take_opt_l t.writers with
     | None -> return ()
     | Some w ->
 	Lwt.wakeup w ();
-	return ()
+        return ()
 
   (* Indicate that more bytes are available for waiting writers.
      Note that sz does not take window scaling into account, and so
      should be passed as unscaled (i.e. from the wire) here.
      Window will internally scale it up. *)
   let free t sz =
-    clear_buffer t >>
-    inform_app t
-   
+    t.free_id <- t.free_id + 1; 
+    lwt _ = clear_buffer t >>
+    inform_app t t.free_id in
+      return ()
 end
