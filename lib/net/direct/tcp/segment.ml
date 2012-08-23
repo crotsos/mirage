@@ -371,12 +371,12 @@ module Rx = struct
          end else return ())
       in
 (*       lwt _ = tx_ack <&> urx_inform in *)
-      let _ = 
+(*     let _ = 
         if ((Sequence.to_int32 seg.ack_number) > 1l) then
           let Some(node_name) = (Lwt.get OS.Topology.node_name) in 
-(*            Printf.printf "%03.6f: TCP packet - thread %s (seq:%ld)\n%!" 
-              (OS.Clock.time ()) node_name (Sequence.to_int32 seg.ack_number) *)
-      in
+            Printf.printf "%03.6f: TCP packet - thread %s (seq:%ld)\n%!" 
+              (OS.Clock.time ()) node_name (Sequence.to_int32 seg.ack_number) 
+      in *)
         return ()
     end
 

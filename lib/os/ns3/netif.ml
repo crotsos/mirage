@@ -150,11 +150,13 @@ let get_writebuf t =
 let rec listen t fn =
   match t.active with
   |true ->
+(*
     let Some(node_name) = (Lwt.get Topology.node_name) in
     let _ = 
       if (node_name = "node2") then 
-(*       printf "%03.6f: asking packet\n%!" (Clock.time ()) *)
+       printf "%03.6f: asking packet\n%!" (Clock.time ()) 
     in
+ *)
 (*     lwt frame = input t in *)
     lwt (len, frame) = Lwt_condition.wait t.fd_push in
 (*
