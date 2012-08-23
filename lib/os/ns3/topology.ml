@@ -20,6 +20,9 @@ external ns3_add_node : string -> string = "ocaml_ns3_add_node"
 external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
 external ns3_add_net_intf : string -> string -> string -> string -> unit = "ns3_add_net_intf"
 
+(* Main run thread *) 
+external ns3_run : int -> int = "ocaml_ns3_run" 
+
 type node_t = {
   name: string;
   cb_init : (unit -> unit Lwt.t);
