@@ -23,9 +23,9 @@ let resolve t = Lwt.on_success t (fun _ -> ())
 
 type t = {
   id: id;
-  fd_push : (int * Io_page.t) Lwt_condition.t;
-  fd_notify: unit Lwt_condition.t;
-  read_block: unit Lwt_condition.t;
+  fd_read : (int * Io_page.t) Lwt_condition.t;
+  fd_read_ret : unit Lwt_condition.t;
+  fd_write : unit Lwt_condition.t;
   mutable active: bool;
   mac: string;
 }
@@ -46,11 +46,11 @@ let ethernet_mac_to_string x =
 let plug node_name id mac =
  let active = true in
    printf "Plugging in device %d \n%!" id; 
- let fd_push = Lwt_condition.create () in
- let fd_notify = Lwt_condition.create  () in 
- let read_block = Lwt_condition.create () in
- let t = { id=(string_of_int id); fd_push; fd_notify;
-           active; read_block; mac } in
+ let fd_read = Lwt_condition.create () in
+ let fd_read_ret = Lwt_condition.create  () in 
+ let fd_write = Lwt_condition.create () in
+ let t = { id=(string_of_int id); fd_read; fd_read_ret;
+           active; fd_write; mac } in
  let _ = 
    if (Hashtbl.mem devices node_name) then (
      let devs = Hashtbl.find devices node_name in 
@@ -62,23 +62,19 @@ let plug node_name id mac =
    printf "Netif: plug %s.%d\n%!" node_name id;
    return t
 
-let _ = Callback.register "plug_dev" plug
-let _ = Callback.register "get_frame" Io_page.get
 
 let demux_pkt node_name dev_id frame = 
   try
     let devs = Hashtbl.find devices node_name in 
-    let _ = List.iter
-              (fun dev -> 
-                 if (dev.id = (string_of_int dev_id)) then
-                   let pkt = Io_page.get () in 
-                   let pkt_len = (String.length frame) in
-                   let _ = (Cstruct.set_buffer frame 0 pkt 0 pkt_len) in
-                   let _ = Lwt_condition.signal dev.fd_push (pkt_len, pkt) in
-                   let _ = resolve (Lwt_condition.wait dev.fd_notify) in
-                     ()
-              ) devs 
-    in
+    let dev = 
+      List.find (
+        fun dev -> (dev.id = (string_of_int dev_id)) ) devs in
+    let pkt = Io_page.get () in 
+    let pkt_len = (String.length frame) in
+    let _ = (Cstruct.set_buffer frame 0 pkt 0 pkt_len) in
+    
+    let _ = Lwt_condition.signal dev.fd_read  (pkt_len, pkt) in
+    let _ = resolve (Lwt_condition.wait dev.fd_read_ret) in
     let _ = Lwt.wakeup_all () in
     let _ = Lwt.wakeup_all () in
     let _ = Lwt.wakeup_all () in
@@ -86,7 +82,6 @@ let demux_pkt node_name dev_id frame =
     let _ = Lwt.wakeup_all () in
     let _ = Lwt.wakeup_all () in
       ()
-(*       Printf.printf "packet_demux 7\n%!" *)
   with 
   | Not_found ->
     Printf.printf "Packet cannot be processed for node %s\n" node_name
@@ -98,19 +93,23 @@ let _ = Callback.register "demux_pkt" demux_pkt
 let unplug node_name id =
   try
     let devs = Hashtbl.find devices node_name in
-      List.iter ( 
+    let _ = List.iter ( 
         fun t ->
           if (t.id = id) then
             t.active <- false
-      ) devs;
-      let new_devs = List.filter (fun t -> t.id <> id) devs in
-        Hashtbl.replace devices node_name new_devs;
-        printf "Netif: unplug %s.%s\n%!" node_name id
+      ) devs in
+    let new_devs = List.filter (fun t -> t.id <> id) devs in
+      Hashtbl.replace devices node_name new_devs;
+      printf "Netif: unplug %s.%s\n%!" node_name id
 (*     Hashtbl.remove devices id *)
   with Not_found -> ()
 
 let create fn =
-  let Some(name) = Lwt.get Topology.node_name in 
+  let name = 
+    match Lwt.get Topology.node_name with 
+      | None -> failwith "thread hasn't got a name"
+      | Some(name) -> name
+  in
     try_lwt
       let devs = Hashtbl.find devices name in
       Lwt_list.iter_p (
@@ -121,23 +120,6 @@ let create fn =
             th <?> user) devs 
     with Not_found ->
       return ()
-
-cstruct ethernet {
-  uint8_t        dst[12];
-  uint16_t       ethertype
-} as big_endian
-
-cstruct ipv4 {
-  uint8_t       hlen_version
-} as big_endian
-
-cstruct tcpv4 {
-  uint16_t src_port;
-  uint16_t dst_port;
-  uint32_t sequence;
-  uint32_t ack_number
-} as big_endian
-
 
 let get_writebuf t =
   let page = Io_page.get () in
@@ -150,34 +132,16 @@ let get_writebuf t =
 let rec listen t fn =
   match t.active with
   |true ->
-(*
-    let Some(node_name) = (Lwt.get Topology.node_name) in
-    let _ = 
-      if (node_name = "node2") then 
-       printf "%03.6f: asking packet\n%!" (Clock.time ()) 
-    in
- *)
-(*     lwt frame = input t in *)
-    lwt (len, frame) = Lwt_condition.wait t.fd_push in
-(*
-    let _ = 
-      if (node_name = "node2") then 
-      printf "%03.6f: received packet\n%!" (Clock.time ())
-    in
- *)
     lwt _ = 
       try_lwt 
+        lwt (len, frame) = Lwt_condition.wait t.fd_read in
         lwt _ = fn frame in
-        let _ = Lwt_condition.signal t.fd_notify in
+        let _ = Lwt_condition.signal t.fd_read_ret in
           return ()
       with exn ->
         return (printf "EXN: %s bt: %s\n%!" (Printexc.to_string exn) 
                   (Printexc.get_backtrace()))
     in
-(*    let _ = 
-      if (node_name = "node2") then 
-      printf "%03.6f: request next packet\n%!" (Clock.time ())
-    in *)
       listen t fn
   |false ->
     return ()
@@ -188,18 +152,20 @@ let destroy nf =
   return ()
 
 let unblock_device name ix = 
-  try_lwt
+  try
     let devs = Hashtbl.find devices name in 
-      Lwt_list.iter_p
-      (fun dev -> 
-        if (dev.id = (string_of_int ix)) then
-          return (Lwt_condition.broadcast dev.read_block ())
-        else return ()
-      ) devs 
+    let dev = List.find 
+      (fun dev -> (dev.id = (string_of_int ix))) devs in
+    let _ =  Lwt_condition.signal dev.fd_write () in
+    let _ = Lwt.wakeup_all () in 
+    let _ = Lwt.wakeup_all () in 
+    let _ = Lwt.wakeup_all () in 
+    let _ = Lwt.wakeup_all () in 
+    let _ = Lwt.wakeup_all () in 
+    let _ = Lwt.wakeup_all () in 
+      ()
   with Not_found ->
-    return (Printf.printf "Packet cannot be processed for node %s\n" name)
-
-let _ = Callback.register "unblock_device" unblock_device
+    Printf.printf "Packet cannot be processed for node %s\n" name
 
 (* Transmit a packet from an Io_page *)
 let write t page =
@@ -212,16 +178,12 @@ let write t page =
     | false ->
       let _ = printf "%03.6f: traffic blocked %s\n%!" (Clock.time ()) node_name in 
       let _ = register_check_queue node_name (int_of_string t.id) in
-      lwt _ = Lwt_condition.wait t.read_block in
+      lwt _ = Lwt_condition.wait t.fd_write in
       let _ = printf "%03.6f: traffic unblocked %s\n%!" (Clock.time ()) node_name in 
         wait_for_queue t
     in
   lwt _ = wait_for_queue t in
-  
-(*   Cstruct.hexdump page;  *)
-(*   printf "off=%d, len=%d\n%!" off len;  *)
   let _ = pkt_write node_name (int_of_string t.id) page off len in
-    Gc.compact() ; 
     return ()
 
 
@@ -233,13 +195,13 @@ let writev t pages =
   |pages ->
     let page = Io_page.get () in
     let off = ref 0 in
-    List.iter (fun p ->
+    let _ = List.iter (fun p ->
       let len = Cstruct.len p in
       Cstruct.blit_buffer p 0 page !off len;
       off := !off + len;
-    ) pages;
+    ) pages in 
     let v = Cstruct.sub page 0 !off in
-    write t v
+      write t v
   
 let ethid t = 
   t.id
@@ -247,3 +209,6 @@ let ethid t =
 let mac t =
   t.mac 
 
+let _ = Callback.register "plug_dev" plug
+let _ = Callback.register "get_frame" Io_page.get
+let _ = Callback.register "unblock_device" unblock_device

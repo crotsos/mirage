@@ -19,9 +19,9 @@ type id = string
 type t  = {
   id: id;
 (*   fd: (int * Io_page.t) Lwt_stream.t; *)
-  fd_push : (int * Io_page.t) Lwt_condition.t;
-  fd_notify : unit Lwt_condition.t;
-  read_block: unit Lwt_condition.t;
+  fd_read : (int * Io_page.t) Lwt_condition.t;
+  fd_read_ret : unit Lwt_condition.t;
+  fd_write: unit Lwt_condition.t;
   mutable active: bool;
   mac: string;
 } 
