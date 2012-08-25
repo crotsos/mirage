@@ -96,8 +96,8 @@ module Tx = struct
 		end else begin
 		  let flags = rexmit_seg.flags in
 		  let options = [] in (* TODO: put the right options *)
-		  printf "TCP retransmission on timer seq = %d\n%!"
-                    (Sequence.to_int rexmit_seg.seq);
+		  printf "%03.6f: TCP retransmission on timer seq = %d\n%!"
+                    (OS.Clock.time ()) (Sequence.to_int rexmit_seg.seq);
 		  let _ = xmit ~flags ~wnd ~options ~seq rexmit_seg.data in
 		  Window.backoff_rto wnd;
 		  (* printf "PUSHING TIMER - new time = %f, new seq = %d\n%!"
