@@ -15,6 +15,7 @@
  *)
 
 open Lwt
+open Printf 
 
 external ns3_add_node : string -> string = "ocaml_ns3_add_node"
 external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
@@ -60,7 +61,7 @@ let add_external_dev dev node ip mask =
   in *)
   Hashtbl.replace topo.nodes dev {name=dev; cb_init=no_act_init;};
   ns3_add_net_intf dev node ip mask
-
+  
 let add_link node_a node_b =
   try 
     let _ = Hashtbl.find topo.nodes node_a in 
@@ -75,12 +76,11 @@ let exec fn () =
 
 let init_node name =
   let _ = Printf.printf "Initialising node %s....\n%!" name in
-  let node = Hashtbl.find topo.nodes name in 
-(*     Main.run (node.cb_init ()) *)
-(*  Hashtbl.iter (
-    fun _ node -> *) 
-      Lwt.with_value node_name (Some(node.name)) (exec node.cb_init)
-(*       ) topo.nodes  *)
+    try
+      let node = Hashtbl.find topo.nodes name in 
+        Lwt.with_value node_name (Some(node.name)) (exec node.cb_init)
+    with Not_found -> 
+      printf "Node '%s' (len %d) was ot found\n%!" name (String.length name)
 
 let _ = Callback.register "init" init_node
 

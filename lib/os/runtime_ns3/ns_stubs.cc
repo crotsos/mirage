@@ -47,11 +47,15 @@
 
 #include <hash_map>
 
-#include <mirage_queue.h>
-#include <mirage_queue.cc>
+//#include <mirage_queue.h>
+//#include <mirage_queue.cc>
 
 using namespace std;
 using namespace ns3;
+
+#ifndef USE_MPI
+#define USE_MPI 1
+#endif
 
 NS_LOG_COMPONENT_DEFINE ("MirageExample");
 
@@ -181,7 +185,9 @@ static void
 DeviceHandler(Ptr<NetDevice> dev) {
   string node_name;
   uint8_t *mac;
+  value ml_mac; 
 
+  caml_register_global_root(&ml_mac);
   node_name = getHostName(dev);
 
   // fetch device mac address
@@ -189,7 +195,6 @@ DeviceHandler(Ptr<NetDevice> dev) {
   bzero(mac, Address::MAX_SIZE);
   dev->GetAddress().CopyTo(mac);
   int mac_len = dev->GetAddress().GetLength();
-  CAMLlocal1( ml_mac );
   ml_mac = caml_alloc_string(mac_len);
   memcpy( String_val(ml_mac), mac, mac_len );
   free(mac);
@@ -198,6 +203,7 @@ DeviceHandler(Ptr<NetDevice> dev) {
   caml_callback3(*caml_named_value("plug_dev"), 
       caml_copy_string((const char *)node_name.c_str()),
       Val_int(dev->GetIfIndex()), ml_mac);
+  caml_remove_global_root(&ml_mac);
 }
 
 bool
@@ -305,7 +311,12 @@ ocaml_ns3_add_node(value ocaml_name)
 
   // create a single node for the new host
   NodeContainer node;
+
+#if USE_MPI 
   node.Create(1, node_count);
+#else 
+  node.Create(1);
+#endif
 
   // add in the last hashmap
   nodes[name] = new node_state();
@@ -332,7 +343,7 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
       nodes[node_b]->node);
   PointToPointHelper p2p;
 //  csma.SetChannelAttribute("Delay", TimeValue (MilliSeconds (1)));
-  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e9)));
+  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e8)));
   Ptr<DropTailQueue> q = CreateObject<DropTailQueue>();
   q->SetAttribute("MaxPackets",  UintegerValue (100));
     
@@ -366,7 +377,11 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
 
   // create a single node for the new host
   NodeContainer node_intf;
+#if USE_MPI 
   node_intf.Create(1, node_count);
+#else
+  node_intf.Create(1);
+#endif
   // add in the last hashmap
   nodes[intf] = new node_state();
   nodes[intf]->node_id = node_count;
@@ -431,9 +446,11 @@ void
 ns3_init(void) {
   int argc = 0;
   char *arg[] = {};
+#if USE_MPI 
   MpiInterface::Enable (&argc, (char ***)&arg);
   GlobalValue::Bind ("SimulatorImplementationType",
       StringValue ("ns3::DistributedSimulatorImpl"));
+#endif
 
 //  GlobalValue::Bind ("SimulatorImplementationType", 
 //      StringValue ("ns3::RealtimeSimulatorImpl"));  
@@ -441,14 +458,21 @@ ns3_init(void) {
 
 static void
 call_init_method (string name) {
-  if ((MpiInterface::GetSystemId ()) ==
+  value ml_name; 
+
+#if USE_MPI
+  if ((MpiInterface::GetSystemId ()) !=
       nodes[name]->node_id) {
-    CAMLlocal1( ml_name );
-    ml_name = caml_alloc_string(name.size());
-    memcpy( String_val(ml_name), name.c_str(), name.size());
-    printf("Running node %s\n", name.c_str());
-    caml_callback(*caml_named_value("init"), ml_name);
+    return;
   }
+#endif 
+
+  caml_register_global_root(&ml_name);
+  ml_name = caml_alloc_string(name.size());
+  memcpy( String_val(ml_name), name.c_str(), name.size());
+  printf("Running node %s\n", name.c_str());
+  caml_callback(*caml_named_value("init"), ml_name);
+  caml_remove_global_root(&ml_name);
 }
 
 /*
@@ -473,6 +497,8 @@ ocaml_ns3_run(value v_duration) {
   Simulator::Run ();
   printf("XXXXXXXXXXXXX finished running\n");
   Simulator::Destroy ();
+#if USE_MPI 
   MpiInterface::Disable ();
+#endif 
   CAMLreturn ( Val_unit );
 }
