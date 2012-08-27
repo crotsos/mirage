@@ -39,7 +39,8 @@ let topo =
 let load t =
   Printf.printf "OS.Topology started...\n%!";
   let _ = t () in
-  Main.run (return ())
+  let _ = ns3_run (Time.get_duration ()) in
+    ()
 
 let add_node name cb_init =
   let _ = ns3_add_node name in
@@ -72,11 +73,14 @@ let node_name = Lwt.new_key ()
 let exec fn () =
   Lwt.ignore_result (fn ())
 
-let init_nodes () =
-  Printf.printf "Initialising nodes....\n%!";
-  Hashtbl.iter (
-    fun _ node -> 
-      Lwt.with_value node_name (Some(node.name)) (exec node.cb_init) ) topo.nodes
+let init_node name =
+  let _ = Printf.printf "Initialising node %s....\n%!" name in
+  let node = Hashtbl.find topo.nodes name in 
+(*     Main.run (node.cb_init ()) *)
+(*  Hashtbl.iter (
+    fun _ node -> *) 
+      Lwt.with_value node_name (Some(node.name)) (exec node.cb_init)
+(*       ) topo.nodes  *)
 
-let _ = Callback.register "init" init_nodes
+let _ = Callback.register "init" init_node
 

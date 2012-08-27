@@ -37,15 +37,10 @@ CAMLprim value ns3_gmtime(value t);
 #endif
 
 CAMLprim value 
-ns3_gettimeofday(value v_unit)
-{
-   CAMLparam1(v_unit);
-//  struct timeval tp;
-//  if (gettimeofday(&tp, NULL) == -1)
-//    caml_failwith("gettimeofday");
+ns3_gettimeofday(value v_unit) {
+  CAMLparam1(v_unit);
   CAMLreturn( caml_copy_double(
         (double)(Simulator::Now().GetMicroSeconds()/1e6)));
-//  return caml_copy_double((double) tp.tv_sec + (double) tp.tv_usec / 1e6);
 }
 
 static value alloc_tm(struct tm *tm)
