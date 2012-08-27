@@ -67,21 +67,25 @@ extern "C" {
 
 void ns3_init(void);
 
+//time event handling function
 CAMLprim value ocaml_ns3_add_timer_event(value p_ts, value p_id);
-CAMLprim value ocaml_ns3_del_timer_event(value p_id); 
+CAMLprim value ocaml_ns3_del_timer_event(value p_id);
 
+// topology functions
 CAMLprim value ocaml_ns3_add_node(value ocaml_name);
 CAMLprim value ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b);
 
-CAMLprim value caml_pkt_write(value v_node_name, value v_id, value v_ba, 
+// net control mechanisms
+CAMLprim value caml_pkt_write(value v_node_name, value v_id, value v_ba,
     value v_off, value v_len);
 CAMLprim value caml_queue_check(value v_name,  value v_id);
 CAMLprim value ocaml_ns3_run(value v_duration);
 CAMLprim value
 caml_register_check_queue(value v_name,  value v_id);
 CAMLprim value
-ns3_add_net_intf(value ocaml_intf, value ocaml_node, 
-    value ocaml_ip, value ocaml_mask);
+ns3_add_net_intf(value v_intf, value v_node, value v_ip, value v_mask);
+
+// export the c ocaml bindings in the c++ object files
 #include <caml/alloc.h>
 #include <caml/callback.h>
 #include <caml/bigarray.h>
@@ -92,23 +96,22 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
 #endif
 
 /*
- * Ns3 event handler functions
+ * State required to be stored in the c code
  */
-
 int node_count = 0;
-
 struct node_state {
   int node_id;
   Ptr<Node> node;
-  
-  node_state ()
-  { }
+  node_state (){ }
 };
 
 map<string, struct node_state* > nodes;
-bool tap_opendev(string intf, string ip, string mask);
 
 
+
+/*
+ * Util functions
+ */
 void 
 hexdump(uint8_t *buf, int len) {
   int p = 0;
@@ -116,22 +119,20 @@ hexdump(uint8_t *buf, int len) {
 
   while(p < len) {
     printf("%02x", buf[p]);
-    if(count == 7)
-      printf(" ");
-    else if(count == 15)
-      printf("\n");
+    if(count == 7) printf(" ");
+    else if(count == 15) printf("\n");
     p++;
-    if(count == 15)
-      count = 0;
-    else
-      count++;
+    count = (count == 15)?0:count + 1;
   }
   printf("\n");
 }
 
+double
+getTsLong() { ((double)Simulator::Now().GetMicroSeconds() / 1e6); }
+
 static string
 getHostName(Ptr<NetDevice> dev) {
-  // find node name 
+  // find node name
   map<string, struct node_state* >::iterator it;
   for (it = nodes.begin(); it != nodes.end(); it++)
     if (dev->GetNode()->GetId() == it->second->node->GetId())
@@ -142,6 +143,7 @@ getHostName(Ptr<NetDevice> dev) {
 /*
  * Timed event methods
  */
+// event state
 map<int, EventId > events;
 static void
 TimerEventHandler(int id) {
@@ -150,8 +152,7 @@ TimerEventHandler(int id) {
     events.erase(it);
     caml_callback(*caml_named_value("timer_wakeup"), Val_int((int)id));
   } else
-    printf("%03.6f: Event %d not found\n", 
-        ((double)Simulator::Now().GetMicroSeconds() / 1e6), id);
+    printf("%03.6f: Event %d not found\n", getTsLong(), id);
 }
 
 CAMLprim value
@@ -159,7 +160,6 @@ ocaml_ns3_add_timer_event(value p_ts, value p_id) {
   CAMLparam2(p_ts, p_id);
   double ts = (Double_val(p_ts) * 1e6);
   int id = Int_val(p_id);
-
   events[id] = Simulator::Schedule(MicroSeconds (ts), &TimerEventHandler, id );
   CAMLreturn( Val_int(id) );
 }
@@ -173,8 +173,7 @@ ocaml_ns3_del_timer_event(value p_id) {
     Simulator::Cancel(it->second);
     events.erase(it);
   } else
-    printf("%03.6f: Event %d not found\n", 
-        ((double)Simulator::Now().GetMicroSeconds() / 1e6), id);
+    printf("%03.6f: Event %d not found\n", getTsLong(), id);
   CAMLreturn(Val_unit);
 }
 
@@ -185,7 +184,7 @@ static void
 DeviceHandler(Ptr<NetDevice> dev) {
   string node_name;
   uint8_t *mac;
-  value ml_mac; 
+  value ml_mac;
 
   caml_register_global_root(&ml_mac);
   node_name = getHostName(dev);
@@ -212,12 +211,11 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pktIn, uint16_t proto,
   value ml_data;
   caml_register_global_root(&ml_data);
   Ptr<Packet> pkt = pktIn->Copy();
-//  pkt->RemoveAtStart(2);
   int pkt_len = pkt->GetSize();
   ml_data = caml_alloc_string(pkt_len);
   uint8_t *data = (uint8_t *)String_val(ml_data);
   pkt->CopyData(data, pkt_len);
-  
+
   // find host name
   string node_name = getHostName(dev);
 
@@ -230,14 +228,17 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pktIn, uint16_t proto,
 }
 
 CAMLprim value
-caml_pkt_write(value v_node_name, value v_id, value v_ba, 
+caml_pkt_write(value v_node_name, value v_ifIx, value v_ba, 
     value v_off, value v_len) {
 
   CAMLparam5(v_node_name, v_id, v_ba, v_off, v_len);
   
-  uint32_t ifIx = (uint32_t)Int_val(v_id);
+  uint32_t ifIx = (uint32_t)Int_val(v_ifIx);
   string node_name = string(String_val(v_node_name));
-  int len = Int_val(v_len), off =  0; //Int_val(v_off);
+  int len = Int_val(v_len);
+
+  //TODO: this appeared invalid on the openflow switch case
+  int off =  0; //Int_val(v_off);
 
   //get a pointer to the packet byte data
   uint8_t *buf = (uint8_t *) Caml_ba_data_val(v_ba);
@@ -246,24 +247,27 @@ caml_pkt_write(value v_node_name, value v_id, value v_ba,
   // find the right device for the node and send packet
   Ptr<Node> node = nodes[node_name]->node;
 
+  //find the dst mac to use it as dst on the send command
   Mac48Address mac_dst;
   mac_dst.CopyFrom(buf + off);
-  for (uint32_t i = 0; i < node->GetNDevices (); i++) 
-    if((node->GetDevice(i)->GetIfIndex() == ifIx) && 
-        (node->GetDevice(i)->IsLinkUp())) { 
-//      if(!node->GetDevice(i)->SendFrom(pkt, mac_src, mac_dst, proto))
-      if(!node->GetDevice(i)->Send(pkt, mac_dst, 0x0800))
-        fprintf(stdout, "%f: packet dropped...\n",
-            (long)Simulator::Now().GetMicroSeconds() / 1e6);
-    }
-  CAMLreturn( Val_unit ); 
+
+  //if the device ix is not valid assertion fails
+  Ptr<NetDevice> dev = node->GetDevice(ifIx);
+  if(node->GetDevice(i)->IsLinkUp()) {
+    if(!node->GetDevice(i)->Send(pkt, mac_dst, 0x0800))
+      fprintf(stdout, "%03.6f: packet dropped...\n", getTsLong());
+  } else {
+    fprintf(stderr, "%03.6f: device %s.%d is not up yet\n", 
+        getTsLong(), node_name, ifIx);
+  }
+  CAMLreturn( Val_unit );
 }
 
 bool
 check_queue_size(string name, int ifIx) {
   /* TODO: not sure how volatile is the default queue len */
   const uint32_t queue_len = 100;
-  Ptr<PointToPointNetDevice> dev =  
+  Ptr<PointToPointNetDevice> dev =
     nodes[name]->node->GetDevice(ifIx)->GetObject<PointToPointNetDevice>();
   Ptr<DropTailQueue> q = dev->GetQueue()->GetObject<DropTailQueue>();
   return (queue_len > q->GetNPackets());
@@ -300,15 +304,8 @@ caml_register_check_queue(value v_name,  value v_id) {
   CAMLreturn(Val_unit);
 }
 
-/*
- * Node and link manipulation function
- */
-CAMLprim value
-ocaml_ns3_add_node(value ocaml_name)
-{
-  CAMLparam1( ocaml_name );
-  string name =  string(String_val(ocaml_name));
-
+Ptr<Node>
+addNs3Node(string name) {
   // create a single node for the new host
   NodeContainer node;
 
@@ -317,19 +314,26 @@ ocaml_ns3_add_node(value ocaml_name)
 #else 
   node.Create(1);
 #endif
-
   // add in the last hashmap
   nodes[name] = new node_state();
   nodes[name]->node_id = node_count;
   node_count++;
   nodes[name]->node = Ptr<Node>(node.Get(0));
-//  Names::Add(name, node.Get(0));
+  Names::Add(name, node.Get(0));
+}
 
+/*
+ * Node and link manipulation function
+ */
+CAMLprim value
+ocaml_ns3_add_node(value v_name) {
+  CAMLparam1( v_name );
+  string name =  string(String_val(v_name));
+  addNs3Node(name);
   // register handlers in case a new network device is added
   // on the node
   nodes[name]->node->RegisterDeviceAdditionListener(MakeCallback(&DeviceHandler));
-
-  CAMLreturn( ocaml_name );
+  CAMLreturn( Val_unit );
 }
 
 CAMLprim value
@@ -339,14 +343,14 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   string node_b = string(String_val(ocaml_node_b));
 
   // create a single node for the new host
-  NodeContainer cont = NodeContainer(nodes[node_a]->node, 
+  NodeContainer cont = NodeContainer(nodes[node_a]->node,
       nodes[node_b]->node);
   PointToPointHelper p2p;
-//  csma.SetChannelAttribute("Delay", TimeValue (MilliSeconds (1)));
+
+  //configure the link properties and queue
   p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e8)));
   Ptr<DropTailQueue> q = CreateObject<DropTailQueue>();
   q->SetAttribute("MaxPackets",  UintegerValue (100));
-    
   p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
   NetDeviceContainer link = p2p.Install(cont);
 
@@ -361,62 +365,13 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   CAMLreturn ( Val_unit );
 }
 
-CAMLprim value
-ns3_add_net_intf(value ocaml_intf, value ocaml_node, 
-    value ocaml_ip, value ocaml_mask) {
-  CAMLparam4(ocaml_intf, ocaml_node, ocaml_ip, ocaml_mask);
+/*
+ * methods to configure an external interface to receive packets in the
+ * simulation.
+ */
 
-  string intf = string(String_val(ocaml_intf));
-  string node = string(String_val(ocaml_node));
-  string ip = string(String_val(ocaml_ip));
-  string mask = string(String_val(ocaml_mask));
-
-  TapBridgeHelper tapBridge;
-
-  fprintf(stderr, "Adding node for external intf %s\n", node.c_str());
-
-  // create a single node for the new host
-  NodeContainer node_intf;
-#if USE_MPI 
-  node_intf.Create(1, node_count);
-#else
-  node_intf.Create(1);
-#endif
-  // add in the last hashmap
-  nodes[intf] = new node_state();
-  nodes[intf]->node_id = node_count;
-  node_count++;
-  nodes[intf]->node = node_intf.Get(0);
-  Names::Add(node, node_intf.Get(0));
-
-  // create a single node to appear as the tap intereface
-  NodeContainer p2p_nodes;
-  p2p_nodes.Add(nodes[node]->node);
-  p2p_nodes.Add(nodes[intf]->node);
-
-  PointToPointHelper p2p;
-  p2p.SetDeviceAttribute ("DataRate", DataRateValue (5000000));
-  Ptr<DropTailQueue> q = Create<DropTailQueue>();
-  p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
-  NetDeviceContainer devices = p2p.Install (p2p_nodes);
-  Ptr<NetDevice> dev = devices.Get(0);
-
-  dev->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
-  string filename = string("openflow-switch-")+node+string("-")+intf;
-  p2p.EnablePcapAll (filename, false);
-
-  tapBridge.SetAttribute ("Mode", StringValue ("UseLocal"));
-  tapBridge.SetAttribute ("DeviceName", StringValue (intf));
-  Ptr< NetDevice > tapDev = tapBridge.Install (nodes[intf]->node, 
-      devices.Get(1));
-  tap_opendev(intf, ip, mask );
-
-  CAMLreturn ( Val_unit );
-}
-
-/* 
- * Configure a tun/tap intf, so we avoid having an internet stack
- * */
+// Configure a tun/tap intf, so we avoid having an internet stack
+// ns3 module installed
 bool
 tap_opendev(string intf, string ip, string mask) {
   char dev[IFNAMSIZ];
@@ -436,12 +391,57 @@ tap_opendev(string intf, string ip, string mask) {
   return true;
 }
 
+CAMLprim value
+ns3_add_net_intf(value v_intf, value v_node,
+    value v_ip, value v_mask) {
+  CAMLparam4(v_intf, v_node, v_ip, v_mask);
+
+  string intf = string(String_val(v_intf));
+  string node = string(String_val(v_node));
+  string ip = string(String_val(v_ip));
+  string mask = string(String_val(v_mask));
+
+  TapBridgeHelper tapBridge;
+  Ptr<Node> node_intf;
+  NodeContainer p2p_nodes;
+  PointToPointHelper p2p;
+
+  fprintf(stderr, "Adding node for external intf %s\n", node.c_str());
+
+  // create a single node for the virtual tap
+  node_intf = addNs3Node(name);
+
+  //group the new virtual tap node and attached node in
+  //a node container
+  p2p_nodes.Add(nodes[node]->node);
+  p2p_nodes.Add(node_intf);
+
+  // create a simulated p2p link
+  p2p.SetDeviceAttribute ("DataRate", DataRateValue (5000000));
+  Ptr<DropTailQueue> q = Create<DropTailQueue>();
+  p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
+  NetDeviceContainer devices = p2p.Install (p2p_nodes);
+  Ptr<NetDevice> dev = devices.Get(0);
+
+  //set a packet interception callback and dump a pcap trace
+  dev->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+  p2p.EnablePcap("ns3", dev, false);
+
+  // Install the tap bridge on the vitrual interface node
+  tapBridge.SetAttribute ("Mode", StringValue ("UseLocal"));
+  tapBridge.SetAttribute ("DeviceName", StringValue (intf));
+  Ptr< NetDevice > tapDev = tapBridge.Install (nodes[intf]->node,
+      node_intf);
+  //create the tap/tun interface
+  tap_opendev(intf, ip, mask );
+
+  CAMLreturn ( Val_unit );
+}
 
 /*
- * A method to call the run functions of the hosts on time 0 of
- * the simulation.
+ * Main function methods to init and run the ocaml code
  */
-
+// inform ocaml code initialize
 void
 ns3_init(void) {
   int argc = 0;
@@ -451,54 +451,53 @@ ns3_init(void) {
   GlobalValue::Bind ("SimulatorImplementationType",
       StringValue ("ns3::DistributedSimulatorImpl"));
 #endif
-
+// param to run simulation in real time. Invalid with mpi simulation
 //  GlobalValue::Bind ("SimulatorImplementationType", 
 //      StringValue ("ns3::RealtimeSimulatorImpl"));  
 }
 
 static void
 call_init_method (string name) {
-  value ml_name; 
+  value ml_name;
 
 #if USE_MPI
   if ((MpiInterface::GetSystemId ()) !=
-      nodes[name]->node_id) {
+      nodes[name]->node_id)
     return;
-  }
-#endif 
-
+#endif
   caml_register_global_root(&ml_name);
   ml_name = caml_alloc_string(name.size());
   memcpy( String_val(ml_name), name.c_str(), name.size());
-  printf("Running node %s\n", name.c_str());
   caml_callback(*caml_named_value("init"), ml_name);
   caml_remove_global_root(&ml_name);
 }
 
-/*
- * Main run mechanism
- */
+// Main simulation run function
 CAMLprim value
 ocaml_ns3_run(value v_duration) {
   CAMLparam1(v_duration);
   int duration = Int_val(v_duration);
+
+  // Configure the logging functionality
   // LogComponentEnable ("TapBridge", LOG_LEVEL_LOGIC);
-  LogComponentEnable ("TapBridgeHelper", LOG_LEVEL_LOGIC);
+  //LogComponentEnable ("TapBridgeHelper", LOG_LEVEL_LOGIC);
+
   if (duration) {
     printf("Setting duration to %d seconds\n", duration);
     Simulator::Stop(Seconds(duration));
   }
 
+  // on time 0 run the init code
   map<string, struct node_state* >::iterator it = nodes.begin();
   for ( ; it != nodes.end(); it++) {
     Simulator::Schedule(Seconds (0.0), &call_init_method, it->first);
   }
-  
+
   Simulator::Run ();
-  printf("XXXXXXXXXXXXX finished running\n");
   Simulator::Destroy ();
 #if USE_MPI 
   MpiInterface::Disable ();
 #endif 
+
   CAMLreturn ( Val_unit );
 }

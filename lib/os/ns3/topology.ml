@@ -17,7 +17,7 @@
 open Lwt
 open Printf 
 
-external ns3_add_node : string -> string = "ocaml_ns3_add_node"
+external ns3_add_node : string -> unit = "ocaml_ns3_add_node"
 external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
 external ns3_add_net_intf : string -> string -> string -> string -> unit = "ns3_add_net_intf"
 
