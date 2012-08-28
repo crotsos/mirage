@@ -47,14 +47,14 @@
 
 #include <hash_map>
 
-//#include <mirage_queue.h>
-//#include <mirage_queue.cc>
+#include <mirage_queue.h>
+#include <mirage_queue.cc>
 
 using namespace std;
 using namespace ns3;
 
 #ifndef USE_MPI
-#define USE_MPI 1
+#define USE_MPI 0
 #endif
 
 NS_LOG_COMPONENT_DEFINE ("MirageExample");
@@ -100,14 +100,23 @@ ns3_add_net_intf(value v_intf, value v_node, value v_ip, value v_mask);
  */
 int node_count = 0;
 struct node_state {
-  int node_id;
+  uint32_t node_id;
   Ptr<Node> node;
+  bool *blocked_dev_mask;
   node_state (){ }
 };
 
 map<string, struct node_state* > nodes;
 
+struct caml_cb {
+  value *init_cb;
+  value *timer_cb;
+  value *net_dev_cb;
+  value *pkt_in_cb;
+  value *queue_unblock_cb;
+};
 
+struct caml_cb *ns3_cb = NULL;
 
 /*
  * Util functions
@@ -128,17 +137,7 @@ hexdump(uint8_t *buf, int len) {
 }
 
 double
-getTsLong() { ((double)Simulator::Now().GetMicroSeconds() / 1e6); }
-
-static string
-getHostName(Ptr<NetDevice> dev) {
-  // find node name
-  map<string, struct node_state* >::iterator it;
-  for (it = nodes.begin(); it != nodes.end(); it++)
-    if (dev->GetNode()->GetId() == it->second->node->GetId())
-      return it->first;
-  return string("");
-}
+getTsLong() { return ((double)Simulator::Now().GetMicroSeconds() / 1e6); }
 
 /*
  * Timed event methods
@@ -150,7 +149,7 @@ TimerEventHandler(int id) {
   map<int, EventId >::iterator it = events.find(id);
   if (it != events.end()) {
     events.erase(it);
-    caml_callback(*caml_named_value("timer_wakeup"), Val_int((int)id));
+    caml_callback(*(ns3_cb->timer_cb), Val_int((int)id));
   } else
     printf("%03.6f: Event %d not found\n", getTsLong(), id);
 }
@@ -182,12 +181,15 @@ ocaml_ns3_del_timer_event(value p_id) {
  */
 static void
 DeviceHandler(Ptr<NetDevice> dev) {
-  string node_name;
+  string name;
   uint8_t *mac;
   value ml_mac;
 
   caml_register_global_root(&ml_mac);
-  node_name = getHostName(dev);
+  name = Names::FindName(dev->GetNode());
+  nodes[name]->blocked_dev_mask = 
+    (bool *)realloc(nodes[name]->blocked_dev_mask, nodes[name]->node->GetNDevices());
+  nodes[name]->blocked_dev_mask[dev->GetIfIndex()] = false;
 
   // fetch device mac address
   mac = (uint8_t *)malloc(Address::MAX_SIZE);
@@ -200,7 +202,7 @@ DeviceHandler(Ptr<NetDevice> dev) {
 
   // passing event to caml code
   caml_callback3(*caml_named_value("plug_dev"), 
-      caml_copy_string((const char *)node_name.c_str()),
+      caml_copy_string((const char *)name.c_str()),
       Val_int(dev->GetIfIndex()), ml_mac);
   caml_remove_global_root(&ml_mac);
 }
@@ -217,10 +219,10 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pktIn, uint16_t proto,
   pkt->CopyData(data, pkt_len);
 
   // find host name
-  string node_name = getHostName(dev);
+  string node_name = Names::FindName(dev->GetNode());
 
   // call packet handling code in caml
-  caml_callback3(*caml_named_value("demux_pkt"),
+  caml_callback3(*ns3_cb->pkt_in_cb,
       caml_copy_string((const char *)node_name.c_str()),
       Val_int(dev->GetIfIndex()), ml_data );
   caml_remove_global_root(&ml_data);
@@ -228,13 +230,13 @@ PktDemux(Ptr<NetDevice> dev, Ptr<const Packet> pktIn, uint16_t proto,
 }
 
 CAMLprim value
-caml_pkt_write(value v_node_name, value v_ifIx, value v_ba, 
+caml_pkt_write(value v_name, value v_ifIx, value v_ba, 
     value v_off, value v_len) {
 
-  CAMLparam5(v_node_name, v_id, v_ba, v_off, v_len);
+  CAMLparam5(v_name, v_ifIx, v_ba, v_off, v_len);
   
   uint32_t ifIx = (uint32_t)Int_val(v_ifIx);
-  string node_name = string(String_val(v_node_name));
+  string name = string(String_val(v_name));
   int len = Int_val(v_len);
 
   //TODO: this appeared invalid on the openflow switch case
@@ -245,7 +247,7 @@ caml_pkt_write(value v_node_name, value v_ifIx, value v_ba,
   Ptr< Packet> pkt = Create<Packet>(buf, len);
 
   // find the right device for the node and send packet
-  Ptr<Node> node = nodes[node_name]->node;
+  Ptr<Node> node = nodes[name]->node;
 
   //find the dst mac to use it as dst on the send command
   Mac48Address mac_dst;
@@ -253,12 +255,12 @@ caml_pkt_write(value v_node_name, value v_ifIx, value v_ba,
 
   //if the device ix is not valid assertion fails
   Ptr<NetDevice> dev = node->GetDevice(ifIx);
-  if(node->GetDevice(i)->IsLinkUp()) {
-    if(!node->GetDevice(i)->Send(pkt, mac_dst, 0x0800))
+  if(dev->IsLinkUp()) {
+    if(!dev->Send(pkt, mac_dst, 0x0800))
       fprintf(stdout, "%03.6f: packet dropped...\n", getTsLong());
   } else {
     fprintf(stderr, "%03.6f: device %s.%d is not up yet\n", 
-        getTsLong(), node_name, ifIx);
+        getTsLong(), name.c_str(), ifIx);
   }
   CAMLreturn( Val_unit );
 }
@@ -269,7 +271,7 @@ check_queue_size(string name, int ifIx) {
   const uint32_t queue_len = 100;
   Ptr<PointToPointNetDevice> dev =
     nodes[name]->node->GetDevice(ifIx)->GetObject<PointToPointNetDevice>();
-  Ptr<DropTailQueue> q = dev->GetQueue()->GetObject<DropTailQueue>();
+  Ptr<MirageQueue> q = dev->GetQueue()->GetObject<MirageQueue>();
   return (queue_len > q->GetNPackets());
 }
 
@@ -285,14 +287,17 @@ caml_queue_check(value v_name,  value v_id) {
     CAMLreturn(Val_false);
 }
 
-static void
-NetQueueCheckHandler(string name, int ifIx) {
-  if(check_queue_size(name,ifIx))
-    caml_callback2(*caml_named_value("unblock_device"),
+static bool
+NetQueueUnblockHandler(Ptr<NetDevice> dev) {
+  string name = Names::FindName(dev->GetNode());
+  int ifIx = dev->GetIfIndex();
+  if( nodes[name]->blocked_dev_mask[ifIx]) {
+     nodes[name]->blocked_dev_mask[ifIx] = false;
+    caml_callback2(*ns3_cb->queue_unblock_cb,
         caml_copy_string((const char *)name.c_str()),
         Val_int(ifIx));
-   else
-    Simulator::Schedule(MicroSeconds(1), &NetQueueCheckHandler, name, ifIx);
+  }
+  return true;
 }
 
 CAMLprim value
@@ -300,7 +305,8 @@ caml_register_check_queue(value v_name,  value v_id) {
   CAMLparam2(v_name, v_id);
   string name =  string(String_val(v_name));
   int ifIx = Int_val(v_id);
-  Simulator::Schedule(MicroSeconds(1), &NetQueueCheckHandler, name, ifIx);
+  nodes[name]->blocked_dev_mask[ifIx] = true;
+//  Simulator::Schedule(MicroSeconds(1), &NetQueueCheckHandler, name, ifIx);
   CAMLreturn(Val_unit);
 }
 
@@ -318,8 +324,11 @@ addNs3Node(string name) {
   nodes[name] = new node_state();
   nodes[name]->node_id = node_count;
   node_count++;
+  nodes[name]->blocked_dev_mask = NULL;
   nodes[name]->node = Ptr<Node>(node.Get(0));
   Names::Add(name, node.Get(0));
+
+  return node.Get(0);
 }
 
 /*
@@ -348,15 +357,22 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   PointToPointHelper p2p;
 
   //configure the link properties and queue
-  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e8)));
-  Ptr<DropTailQueue> q = CreateObject<DropTailQueue>();
+  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e9)));
+  Ptr<MirageQueue> q = CreateObject<MirageQueue>();
   q->SetAttribute("MaxPackets",  UintegerValue (100));
   p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
   NetDeviceContainer link = p2p.Install(cont);
 
   //setup packet handler
+  MirageQueue::QueueUnblockCallback cb = MakeCallback(&NetQueueUnblockHandler);
   link.Get(0)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+  printf("queu pointer: %s\n", 
+      (void *)((Ptr<MirageQueue>)link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue()));
+  link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue()->
+    GetObject<MirageQueue>()->SetUnblockCallback(cb, link.Get(0));
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
+  link.Get(1)->GetObject<PointToPointNetDevice>()->GetQueue()->
+    GetObject<MirageQueue>()->SetUnblockCallback(cb, link.Get(1));
 
   //capture pcap trace
   p2p.EnablePcap("ns3", link.Get(0), true);
@@ -369,7 +385,6 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
  * methods to configure an external interface to receive packets in the
  * simulation.
  */
-
 // Configure a tun/tap intf, so we avoid having an internet stack
 // ns3 module installed
 bool
@@ -409,7 +424,7 @@ ns3_add_net_intf(value v_intf, value v_node,
   fprintf(stderr, "Adding node for external intf %s\n", node.c_str());
 
   // create a single node for the virtual tap
-  node_intf = addNs3Node(name);
+  node_intf = addNs3Node(node);
 
   //group the new virtual tap node and attached node in
   //a node container
@@ -418,8 +433,9 @@ ns3_add_net_intf(value v_intf, value v_node,
 
   // create a simulated p2p link
   p2p.SetDeviceAttribute ("DataRate", DataRateValue (5000000));
-  Ptr<DropTailQueue> q = Create<DropTailQueue>();
+  Ptr<MirageQueue> q = Create<MirageQueue>();
   p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
+
   NetDeviceContainer devices = p2p.Install (p2p_nodes);
   Ptr<NetDevice> dev = devices.Get(0);
 
@@ -431,7 +447,8 @@ ns3_add_net_intf(value v_intf, value v_node,
   tapBridge.SetAttribute ("Mode", StringValue ("UseLocal"));
   tapBridge.SetAttribute ("DeviceName", StringValue (intf));
   Ptr< NetDevice > tapDev = tapBridge.Install (nodes[intf]->node,
-      node_intf);
+      node_intf->GetDevice(0));
+
   //create the tap/tun interface
   tap_opendev(intf, ip, mask );
 
@@ -451,6 +468,7 @@ ns3_init(void) {
   GlobalValue::Bind ("SimulatorImplementationType",
       StringValue ("ns3::DistributedSimulatorImpl"));
 #endif
+
 // param to run simulation in real time. Invalid with mpi simulation
 //  GlobalValue::Bind ("SimulatorImplementationType", 
 //      StringValue ("ns3::RealtimeSimulatorImpl"));  
@@ -468,7 +486,7 @@ call_init_method (string name) {
   caml_register_global_root(&ml_name);
   ml_name = caml_alloc_string(name.size());
   memcpy( String_val(ml_name), name.c_str(), name.size());
-  caml_callback(*caml_named_value("init"), ml_name);
+  caml_callback(*(ns3_cb->init_cb), ml_name);
   caml_remove_global_root(&ml_name);
 }
 
@@ -486,6 +504,14 @@ ocaml_ns3_run(value v_duration) {
     printf("Setting duration to %d seconds\n", duration);
     Simulator::Stop(Seconds(duration));
   }
+
+  // store the pointers to caml named values used in the program
+  ns3_cb = new struct caml_cb;
+  ns3_cb->timer_cb = caml_named_value("timer_wakeup");
+  ns3_cb->init_cb = caml_named_value("init");
+  ns3_cb->net_dev_cb = caml_named_value("plug_dev");
+  ns3_cb->pkt_in_cb = caml_named_value("demux_pkt");
+  ns3_cb->queue_unblock_cb = caml_named_value("unblock_device");
 
   // on time 0 run the init code
   map<string, struct node_state* >::iterator it = nodes.begin();

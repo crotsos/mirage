@@ -39,7 +39,10 @@ class TraceContainer;
  * \brief A FIFO packet queue that drops tail-end packets on overflow
  */
 class MirageQueue : public Queue {
+
 public:
+  typedef Callback< bool, Ptr<NetDevice> > QueueUnblockCallback;
+
   static TypeId GetTypeId (void);
   /**
    * \brief MirageQueue Constructor
@@ -65,6 +68,8 @@ public:
    */
   MirageQueue::QueueMode GetMode (void);
 
+  void SetUnblockCallback(QueueUnblockCallback cb, Ptr<NetDevice> dev);
+
 private:
   virtual bool DoEnqueue (Ptr<Packet> p);
   virtual Ptr<Packet> DoDequeue (void);
@@ -75,6 +80,8 @@ private:
   uint32_t m_maxBytes;
   uint32_t m_bytesInQueue;
   QueueMode m_mode;
+  MirageQueue::QueueUnblockCallback m_unblockCallback;
+  Ptr<NetDevice> m_device;
 };
 
 } // namespace ns3

@@ -130,6 +130,9 @@ MirageQueue::DoDequeue (void)
   NS_LOG_LOGIC ("Number packets " << m_packets.size ());
   NS_LOG_LOGIC ("Number bytes " << m_bytesInQueue);
 
+  if (!this->m_unblockCallback.IsNull ()) {
+    this->m_unblockCallback(this->m_device);
+  }
   return p;
 }
 
@@ -150,6 +153,12 @@ MirageQueue::DoPeek (void) const
   NS_LOG_LOGIC ("Number bytes " << m_bytesInQueue);
 
   return p;
+}
+
+void 
+MirageQueue::SetUnblockCallback(QueueUnblockCallback cb, Ptr<NetDevice> dev) {
+  this->m_unblockCallback = cb;
+  this->m_device = dev;
 }
 
 } // namespace ns3
