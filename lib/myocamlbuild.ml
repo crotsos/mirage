@@ -67,7 +67,8 @@ module Spec = struct
   (* The modules to copy into std/ are specified as (<dest file in std/> * "<subdirectory>/<file>") *)
   let modules =
     let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "openflow"; "oUnit"; "fs" ] in
-    let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "oUnit"; "fs" ] in
+(*     let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "oUnit"; "fs"
+ *     ] in *)
     let libs = List.map (fun lib -> lib, (ps "%s/%s" lib lib)) baselibs in
     os :: net :: block :: libs
 
@@ -170,7 +171,7 @@ module CC = struct
   ]
 
   (* use ns3 header files *)
-  let ns3_incs = [A "-I/usr/local/include/ns3-dev";]
+  let ns3_incs = [ A"-I/usr/include"; A"-I../../../lib/os/runtime_ns3"; (*A "-I/usr/include/ns4"; *) ]
 
   let cc_cflags = List.map (fun x -> A x) !cflags
 
@@ -338,7 +339,7 @@ let _ = dispatch begin function
     flag ["c"; "compile"; "include_dietlibc"] & S CC.dietlibc_incs;
     flag ["c"; "compile"; "include_ns3"] & S CC.ns3_incs;
     flag ["ocamlmklib"; "c"; "use_asmrun"]
-      (S[A"-L/opt/godi/lib/ocaml/std-lib"; A"-lcamlrun_shared";]);
+      (S[A"-L/opt/godi/lib/ocaml/std-lib"; ]);
     flag ["c"; "compile"; "pic"] & S [A"-fPIC"]
   | _ -> ()
 end

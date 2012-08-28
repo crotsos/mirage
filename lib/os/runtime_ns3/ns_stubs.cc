@@ -47,6 +47,7 @@
 
 #include <hash_map>
 
+//#include <ns3/mirage-module.h>
 #include <mirage_queue.h>
 #include <mirage_queue.cc>
 
@@ -271,7 +272,7 @@ check_queue_size(string name, int ifIx) {
   const uint32_t queue_len = 100;
   Ptr<PointToPointNetDevice> dev =
     nodes[name]->node->GetDevice(ifIx)->GetObject<PointToPointNetDevice>();
-  Ptr<MirageQueue> q = dev->GetQueue()->GetObject<MirageQueue>();
+  Ptr<Queue> q = dev->GetQueue();
   return (queue_len > q->GetNPackets());
 }
 
@@ -350,6 +351,7 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   CAMLparam2(ocaml_node_a, ocaml_node_b);
   string node_a = string(String_val(ocaml_node_a));
   string node_b = string(String_val(ocaml_node_b));
+  Ptr<MirageQueue> q;
 
   // create a single node for the new host
   NodeContainer cont = NodeContainer(nodes[node_a]->node,
@@ -358,7 +360,7 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
 
   //configure the link properties and queue
   p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e9)));
-  Ptr<MirageQueue> q = CreateObject<MirageQueue>();
+/*   Ptr<MirageQueue> */ q = CreateObject<MirageQueue>();
   q->SetAttribute("MaxPackets",  UintegerValue (100));
   p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
   NetDeviceContainer link = p2p.Install(cont);
@@ -366,17 +368,24 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   //setup packet handler
   MirageQueue::QueueUnblockCallback cb = MakeCallback(&NetQueueUnblockHandler);
   link.Get(0)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
-  printf("queu pointer: %s\n", 
-      (void *)((Ptr<MirageQueue>)link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue()));
-  link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue()->
-    GetObject<MirageQueue>()->SetUnblockCallback(cb, link.Get(0));
+  q = CreateObject<MirageQueue>();
+  q->SetAttribute("MaxPackets",  UintegerValue (100));
+  q->SetUnblockCallback(cb, link.Get(0));
+  link.Get(0)->GetObject<PointToPointNetDevice>()->SetQueue(q->GetObject<Queue>());
   link.Get(1)->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
-  link.Get(1)->GetObject<PointToPointNetDevice>()->GetQueue()->
-    GetObject<MirageQueue>()->SetUnblockCallback(cb, link.Get(1));
+  q = CreateObject<MirageQueue>();
+  q->SetAttribute("MaxPackets",  UintegerValue (100));
+  q->SetUnblockCallback(cb, link.Get(1));
+  link.Get(1)->GetObject<PointToPointNetDevice>()->SetQueue(q->GetObject<Queue>());
 
   //capture pcap trace
   p2p.EnablePcap("ns3", link.Get(0), true);
   p2p.EnablePcap("ns3", link.Get(1), true);
+
+  printf("queue: %p\n mirage queue: %p\n", 
+      (void *)link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue(),
+       (void *)link.Get(0)->GetObject<PointToPointNetDevice>()->
+       GetQueue()->GetObject<MirageQueue>(q->GetTypeId()));
 
   CAMLreturn ( Val_unit );
 }
@@ -499,6 +508,8 @@ ocaml_ns3_run(value v_duration) {
   // Configure the logging functionality
   // LogComponentEnable ("TapBridge", LOG_LEVEL_LOGIC);
   //LogComponentEnable ("TapBridgeHelper", LOG_LEVEL_LOGIC);
+//  LogComponentEnable ("MirageQueue", LOG_LEVEL_LOGIC);
+//  LogComponentEnable ("PointToPointNetDevice", LOG_LEVEL_LOGIC);
 
   if (duration) {
     printf("Setting duration to %d seconds\n", duration);

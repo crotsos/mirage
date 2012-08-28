@@ -88,6 +88,12 @@ let ip node_id =
     [ ipv4_addr_of_tuple (10l,0l,1l,1l) ]
     )) 
       
+let print_time () = 
+  while_lwt true do
+    OS.Time.sleep 1.0 >>
+      return ( printf "%03.6f: running process.." (OS.Clock.time ()) )
+  done
+
 (* Code to run on the end node *)
 let host_inner host_id () =
   printf "%f: running host %d\n%!" (Clock.time ()) host_id;
@@ -108,7 +114,8 @@ let host_inner host_id () =
           lwt _ = Time.sleep 1.0 in
           Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
 (*             echo_client_udp mgr (dst_ip,port) *)
-          Net.Channel.connect mgr (`TCPv4 (None, (dst_ip, port), echo_client ))
+          Net.Channel.connect mgr (`TCPv4 (None, (dst_ip, port), echo_client )) <&>
+            (print_time ())
         | _ -> return (printf "Invalid node_id %d\n%!" host_id)
         )
     with e ->
@@ -119,7 +126,7 @@ let host_inner host_id () =
 
 (* Design the topology *)
 let run () =
-  let _ = OS.Time.set_duration 60 in 
+  let _ = OS.Time.set_duration 10 in 
   (* Define participating nodes *)
   let _ = Topology.add_node "node1" (host_inner 1) in
   let _ = Topology.add_node "node2" (host_inner 2) in
