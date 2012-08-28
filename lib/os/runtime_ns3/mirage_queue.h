@@ -26,8 +26,10 @@
 #define MIRAGE_QUEUE_H
 
 #include <queue>
-#include "ns3/packet.h"
-#include "ns3/queue.h"
+#include <ns3/packet.h>
+#include <ns3/queue.h>
+#include <ns3/net-device.h>
+#include <ns3/log.h>
 
 namespace ns3 {
 
@@ -41,6 +43,13 @@ class TraceContainer;
 class MirageQueue : public Queue {
 
 public:
+  enum QueueMode
+  {
+    QUEUE_MODE_PACKETS,     /**< Use number of packets for maximum queue size */
+    QUEUE_MODE_BYTES,       /**< Use number of bytes for maximum queue size */
+  };
+
+
   typedef Callback< bool, Ptr<NetDevice> > QueueUnblockCallback;
 
   static TypeId GetTypeId (void);
@@ -74,6 +83,7 @@ private:
   virtual bool DoEnqueue (Ptr<Packet> p);
   virtual Ptr<Packet> DoDequeue (void);
   virtual Ptr<const Packet> DoPeek (void) const;
+  void NotifyQueueEmpty(void);
 
   std::queue<Ptr<Packet> > m_packets;
   uint32_t m_maxPackets;

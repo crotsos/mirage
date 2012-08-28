@@ -19,11 +19,11 @@
  * An ns3 net device queue to generate queue empty events and propagate them
  * to applications in order to avoid constant queue poling.
  * */
-#include <ns3/log.h>
 #include <ns3/enum.h>
 #include <ns3/uinteger.h>
 #include <mirage_queue.h>
 
+// NS_LOG_COMPONENT_DEFINE ("MirageQueue");
 
 namespace ns3 {
 
@@ -131,9 +131,14 @@ MirageQueue::DoDequeue (void)
   NS_LOG_LOGIC ("Number bytes " << m_bytesInQueue);
 
   if (!this->m_unblockCallback.IsNull ()) {
-    this->m_unblockCallback(this->m_device);
+     Simulator::ScheduleNow(&MirageQueue::NotifyQueueEmpty, this);
   }
   return p;
+}
+
+void
+MirageQueue::NotifyQueueEmpty() {
+  this->m_unblockCallback(this->m_device);
 }
 
 Ptr<const Packet>
