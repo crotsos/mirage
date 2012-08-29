@@ -176,10 +176,14 @@ let write t page =
     match (queue_check node_name (int_of_string t.id)) with
     | true -> return ()
     | false ->
-      let _ = printf "%03.6f: traffic blocked %s\n%!" (Clock.time ()) node_name in 
+(*       let _ = printf "%03.6f: traffic blocked %s\n%!" (Clock.time ()) *)
+(*         node_name in   *)
       let _ = register_check_queue node_name (int_of_string t.id) in
       lwt _ = Lwt_condition.wait t.fd_write in
-      let _ = printf "%03.6f: traffic unblocked %s\n%!" (Clock.time ()) node_name in 
+(*
+      let _ = printf "%03.6f: traffic unblocked %s\n%!" (Clock.time ())
+        node_name in  
+*)
         wait_for_queue t
     in
   lwt _ = wait_for_queue t in

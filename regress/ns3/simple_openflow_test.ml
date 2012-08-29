@@ -79,7 +79,7 @@ let rec echo_client_udp mgr dst =
       send_data ()
   with 
     | Nettypes.Closed -> return (Log.info "Echo" "closed!")
-    | ex ->  return (Printf.printf "Eroor:%s\n%!" (Printexc.to_string ex))
+    | ex ->  return (Printf.printf "Error:%s\n%!" (Printexc.to_string ex))
 
 let ip node_id = 
   Nettypes.(
@@ -90,20 +90,17 @@ let ip node_id =
       
 (* Code to run on the end node *)
 let host_inner host_id () =
-  printf "%f: running host %d\n%!" (Clock.time ()) host_id;
   let config_host host_id =
     try_lwt 
       Manager.create (fun mgr interface id ->
-        lwt _ = Time.sleep 0.1 in 
+        lwt _ = Time.sleep 1. in 
         match host_id with
         | 1 ->
           lwt _ = Manager.configure interface (`IPv4 (ip host_id)) in
-          Printf.printf "%f: trying to connect server\n%!" (Clock.time ());
 (*             Datagram.UDPv4.recv mgr (None, port) echo_udp *)
           Net.Channel.listen mgr (`TCPv4 ((None, port), echo ))
         | 2 -> 
           let dst_ip = Nettypes.ipv4_addr_of_tuple (10l,0l,1l,1l) in  
-          Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
           lwt _ = Manager.configure interface (`IPv4 (ip host_id)) in
           lwt _ = Time.sleep 1.0 in
           Printf.printf "%f: trying to connect client \n%!" (Clock.time ());
@@ -150,7 +147,6 @@ let datapath_join_cb controller dpid evt =
   return (pp "+ datapath:0x%012Lx\n" dp)
 
 let packet_in_cb controller dpid evt =
-  printf "XXXXXXX Packet in received\n%!";
   incr switch_data.req_count;
   let (in_port, buffer_id, data, dp) = 
     match evt with
@@ -212,7 +208,6 @@ let init st =
   OC.register_cb st OE.PACKET_IN packet_in_cb
 
 let controller_inner () = 
-  printf "%f: running of controller net config\n%!" (Clock.time ());
   try_lwt 
     Manager.create (fun mgr interface id ->
       let ip = 
@@ -230,12 +225,6 @@ let controller_inner () =
  * OpenFlow Switch configuration 
  *****************************************************************)
 let switch_plug sw t id vif =
-  printf "Manager: plug %s\n%!" id; 
-(*
-  let wrap (s,t) = try_lwt t >>= return with exn ->
-    (printf "Manager: exn=%s %s\n%!" s (Printexc.to_string exn); fail exn) in
-
- *)
   match (id) with 
   | "0" ->
   (*
@@ -251,12 +240,14 @@ let switch_plug sw t id vif =
      * *)
     let (netif, netif_t) = Ethif.create vif in
     let _ = Openflow.Ofswitch.add_port sw netif in  
-(*
-    let th,_ = Lwt.task () in
- *)
-    printf "Manager: plug done, to listener\n%!";
       return ()
   end 
+
+let print_time () =
+  while_lwt true do
+    Time.sleep 1.0 >>
+    return (printf "%03.6f: process running..\n%!" (OS.Clock.time ()))
+  done
 
 let switch_inner () = 
   let sw = Openflow.Ofswitch.create_switch () in
@@ -267,7 +258,7 @@ let switch_inner () =
           (ipv4_addr_of_tuple (10l,0l,0l,1l),
           ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
       lwt _ = Manager.configure interface (`IPv4 ip) in
-      lwt _ = Openflow.Ofswitch.listen sw mgr (None, 6633) in 
+      lwt _ = (Openflow.Ofswitch.listen sw mgr (None, 6633) <&> (print_time ())) in 
       return ()
     )
   with e ->
@@ -276,7 +267,7 @@ let switch_inner () =
 
 (* Design the topology *)
 let run () =
-  let _ = OS.Time.set_duration 60 in 
+  let _ = OS.Time.set_duration 10 in 
   (* Define participating nodes *)
   let _ = Topology.add_node "switch" switch_inner in 
   let _ = Topology.add_node "controller" controller_inner in 
@@ -285,7 +276,7 @@ let run () =
 
   (* Define topology *)
   let _ = Topology.add_link "controller" "switch" in
-  let _ = Topology.add_link "node1" "switch" in
-  let _ = Topology.add_link "node2" "switch" in
+  let _ = Topology.add_link ~rate:1000 ~pcap:true "node1" "switch" in
+  let _ = Topology.add_link ~rate:1000 "node2" "switch" in
     ()
 (*   OS.Topology.add_external_dev "nstap0" "node1" "10.0.1.0" "255.255.255.0" *)

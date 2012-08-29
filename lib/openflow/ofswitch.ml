@@ -401,8 +401,9 @@ module Switch = struct
     | 0x0806 ->
       Some(sizeof_dl_header + sizeof_arphdr)
     | _ ->
-      ep "Cannot determine size of ethtype %x\n%!" dl_type;
-      None
+      let _ = ep "Cannot determine size of ethtype %x\n%!" dl_type in
+      let _ = Cstruct.hexdump bits in 
+        None
 
   (* Assumwe that action are valid. I will not get a flow that sets an ip
    * address unless it defines that the ethType is ip. Need to enforce
@@ -563,8 +564,13 @@ let process_frame st intf_name frame =
       pr "dropping packet at the switch\n%!";
       return ()
     ) *)
-    with Not_found -> 
-      return (pr "Invalid port %s\n%!" (netif_id_of_ethif intf_name)) 
+    with 
+    | Not_found -> 
+      return (pr "%03.6f: Invalid port %s\n%!" (OS.Clock.time ()) (netif_id_of_ethif intf_name))
+    | Packet_type_unknw ->
+      return (pr "%03.6f: received a malformed packet\n%!" (OS.Clock.time ()))
+    | exn ->
+      return (pr "%03.6f: switch error: %s\n%!" (OS.Clock.time ()) (Printexc.to_string exn))
 
 let data_plane st () = 
   try_lwt 
