@@ -18,7 +18,8 @@ open Lwt
 open Printf 
 
 external ns3_add_node : string -> unit = "ocaml_ns3_add_node"
-external ns3_add_link : string -> string -> unit = "ocaml_ns3_add_link"
+external ns3_add_link : string -> string -> int -> int -> int -> bool -> unit 
+= "ocaml_ns3_add_link_bytecode" "ocaml_ns3_add_link_native"
 external ns3_add_net_intf : string -> string -> string -> string -> unit = "ns3_add_net_intf"
 
 (* Main run thread *) 
@@ -62,11 +63,13 @@ let add_external_dev dev node ip mask =
   Hashtbl.replace topo.nodes dev {name=dev; cb_init=no_act_init;};
   ns3_add_net_intf dev node ip mask
   
-let add_link node_a node_b =
+  (* rate is in Mbps. *)
+let add_link ?(rate=1000) ?(prop_delay=0) ?(queue_size=100) ?(pcap=false)
+    node_a node_b =
   try 
     let _ = Hashtbl.find topo.nodes node_a in 
     let _ = Hashtbl.find topo.nodes node_b in 
-      ns3_add_link node_a node_b 
+      ns3_add_link node_a node_b rate prop_delay queue_size pcap  
   with Not_found -> ()
 
 let node_name = Lwt.new_key ()
