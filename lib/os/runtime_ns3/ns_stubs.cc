@@ -55,7 +55,7 @@ using namespace std;
 using namespace ns3;
 
 #ifndef USE_MPI
-#define USE_MPI 0
+#define USE_MPI 1
 #endif
 
 NS_LOG_COMPONENT_DEFINE ("MirageExample");
@@ -74,7 +74,10 @@ CAMLprim value ocaml_ns3_del_timer_event(value p_id);
 
 // topology functions
 CAMLprim value ocaml_ns3_add_node(value ocaml_name);
-CAMLprim value ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b);
+CAMLprim value ocaml_ns3_add_link_bytecode(value * argv, int argn);
+CAMLprim value ocaml_ns3_add_link_native(value ocaml_node_a,
+    value ocaml_node_b, value v_rate, value v_prop_d, value v_queue_size,
+    value v_pcap);
 
 // net control mechanisms
 CAMLprim value caml_pkt_write(value v_node_name, value v_id, value v_ba,
@@ -347,10 +350,24 @@ ocaml_ns3_add_node(value v_name) {
 }
 
 CAMLprim value
-ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
-  CAMLparam2(ocaml_node_a, ocaml_node_b);
+ocaml_ns3_add_link_bytecode(value * argv, int argn) {
+  return ocaml_ns3_add_link_native(argv[0], argv[1], argv[2], argv[3],
+      argv[4], argv[5]);
+}
+
+
+CAMLprim value
+ocaml_ns3_add_link_native(value ocaml_node_a, value ocaml_node_b, value v_rate,
+    value v_prop_d, value v_queue_size, value v_pcap) {
+  CAMLparam5(ocaml_node_a, ocaml_node_b, v_rate, v_prop_d, v_queue_size);
+  CAMLxparam1(v_pcap);
   string node_a = string(String_val(ocaml_node_a));
   string node_b = string(String_val(ocaml_node_b));
+  uint32_t rate = ((uint32_t)Int_val(v_rate))*1e6;
+  int propagation = Int_val(v_prop_d);
+  int queue_size = Int_val(v_queue_size);
+  bool use_pcap = Bool_val(v_pcap);
+  
   Ptr<MirageQueue> q;
 
   // create a single node for the new host
@@ -359,9 +376,10 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   PointToPointHelper p2p;
 
   //configure the link properties and queue
-  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (1e9)));
+  p2p.SetDeviceAttribute("DataRate", DataRateValue (DataRate (rate)));
+  p2p.SetChannelAttribute("Delay", TimeValue(NanoSeconds(propagation)));
 /*   Ptr<MirageQueue> */ q = CreateObject<MirageQueue>();
-  q->SetAttribute("MaxPackets",  UintegerValue (100));
+  q->SetAttribute("MaxPackets",  UintegerValue (queue_size));
   p2p.SetDeviceAttribute("TxQueue", PointerValue(q));
   NetDeviceContainer link = p2p.Install(cont);
 
@@ -379,13 +397,10 @@ ocaml_ns3_add_link(value ocaml_node_a, value ocaml_node_b) {
   link.Get(1)->GetObject<PointToPointNetDevice>()->SetQueue(q->GetObject<Queue>());
 
   //capture pcap trace
-  p2p.EnablePcap("ns3", link.Get(0), true);
-  p2p.EnablePcap("ns3", link.Get(1), true);
-
-  printf("queue: %p\n mirage queue: %p\n", 
-      (void *)link.Get(0)->GetObject<PointToPointNetDevice>()->GetQueue(),
-       (void *)link.Get(0)->GetObject<PointToPointNetDevice>()->
-       GetQueue()->GetObject<MirageQueue>(q->GetTypeId()));
+  if (use_pcap) {
+    p2p.EnablePcap("ns3", link.Get(0), true);
+    p2p.EnablePcap("ns3", link.Get(1), true);
+  }
 
   CAMLreturn ( Val_unit );
 }
@@ -450,7 +465,7 @@ ns3_add_net_intf(value v_intf, value v_node,
 
   //set a packet interception callback and dump a pcap trace
   dev->SetPromiscReceiveCallback(MakeCallback(&PktDemux));
-  p2p.EnablePcap("ns3", dev, false);
+//  p2p.EnablePcap("ns3", dev, false);
 
   // Install the tap bridge on the vitrual interface node
   tapBridge.SetAttribute ("Mode", StringValue ("UseLocal"));
@@ -504,6 +519,15 @@ CAMLprim value
 ocaml_ns3_run(value v_duration) {
   CAMLparam1(v_duration);
   int duration = Int_val(v_duration);
+
+  // for each host I need a signle process 
+  if (MpiInterface::GetSize() < nodes.size()) {
+    char msg[2048];
+    snprintf(msg, 2048, "Insufficient number of mpi processes. Need %d processes.", 
+        (int)nodes.size());
+    NS_FATAL_ERROR(msg);
+    exit(1);
+  }
 
   // Configure the logging functionality
   // LogComponentEnable ("TapBridge", LOG_LEVEL_LOGIC);
