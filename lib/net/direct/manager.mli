@@ -26,20 +26,21 @@ type config = [ `DHCP | `IPv4 of ipv4_addr * ipv4_addr * ipv4_addr list ]
 type id = OS.Netif.id
 type interface
 type t
-val get_netif: interface -> Ethif.t
 
-val plug: t -> id -> OS.Netif.t -> unit Lwt.t
 val unplug: t -> id -> unit
 
 val configure: interface -> config -> unit Lwt.t
  
-val plug: t -> id -> OS.Netif.t -> unit Lwt.t 
-val create : ?plug:(t -> id -> OS.Netif.t -> unit Lwt.t) 
-    -> (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
+val create : (t -> interface -> id -> unit Lwt.t) -> unit Lwt.t
+val set_promiscuous: t -> id -> (id -> Cstruct.buf -> unit Lwt.t) ->
+  unit
+val inject_packet : t -> id -> Cstruct.buf -> unit Lwt.t
 
 val tcpv4_of_addr : t -> ipv4_addr option -> Tcp.Pcb.t list
 val tcpv4_of_dst_addr : t -> ipv4_addr -> Tcp.Pcb.t
 
 val udpv4_of_addr : t -> ipv4_addr option -> Udp.t list
 val ipv4_of_interface : interface -> Ipv4.t
-val get_intf : interface -> string
+
+val get_intf_name : t -> id -> string
+val get_intf_mac : t -> id -> string

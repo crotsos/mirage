@@ -224,9 +224,7 @@ let controller_inner () =
 (****************************************************************
  * OpenFlow Switch configuration 
  *****************************************************************)
-let switch_plug sw t id vif =
-  match (id) with 
-  | "0" ->
+(*let switch_plug sw t id vif =
   (*
    * the first vif will be the controller - switch channel, so need
    * to setup a proper ip stack and assign ip addresses
@@ -241,7 +239,7 @@ let switch_plug sw t id vif =
     let (netif, netif_t) = Ethif.create vif in
     let _ = Openflow.Ofswitch.add_port sw netif in  
       return ()
-  end 
+  end *)
 
 let print_time () =
   while_lwt true do
@@ -252,14 +250,20 @@ let print_time () =
 let switch_inner () = 
   let sw = Openflow.Ofswitch.create_switch () in
   try_lwt 
-    Manager.create ~plug:(switch_plug sw) (fun mgr interface id ->
-      let ip = 
-        Nettypes.(
-          (ipv4_addr_of_tuple (10l,0l,0l,1l),
-          ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
-      lwt _ = Manager.configure interface (`IPv4 ip) in
-      lwt _ = (Openflow.Ofswitch.listen sw mgr (None, 6633) <&> (print_time ())) in 
-      return ()
+    Manager.create 
+    (fun mgr interface id ->
+       match (id) with 
+         | "0" ->
+             let ip = 
+               Nettypes.(
+                 (ipv4_addr_of_tuple (10l,0l,0l,1l),
+                  ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
+               lwt _ = Manager.configure interface (`IPv4 ip) in
+               lwt _ = (Openflow.Ofswitch.listen sw mgr (None, 6633) <&> 
+                       (print_time ())) in 
+                return ()
+      | _ -> 
+          return (Openflow.Ofswitch.add_port mgr sw id)
     )
   with e ->
     Printf.eprintf "Error: %s" (Printexc.to_string e); 

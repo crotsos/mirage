@@ -22,12 +22,12 @@ type t = {
   mac: ethernet_mac;
   arp: Arp.t;
   mutable ipv4: (OS.Io_page.t -> unit Lwt.t);
-  mutable promiscuous:(t -> Cstruct.buf -> unit Lwt.t) option;
+  mutable promiscuous:(Cstruct.buf -> unit Lwt.t) option;
 }
 
 val input : t -> OS.Io_page.t -> unit Lwt.t
 val listen : t -> unit Lwt.t
-val set_promiscuous : t -> (t -> OS.Io_page.t -> unit Lwt.t) -> unit
+val set_promiscuous : t -> (Cstruct.buf -> unit Lwt.t) -> unit
 val write : t -> OS.Io_page.t -> unit Lwt.t
 val writev : t -> OS.Io_page.t list -> unit Lwt.t
 val create : OS.Netif.t -> t * unit Lwt.t

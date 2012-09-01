@@ -24,7 +24,7 @@ type t = {
   mac: ethernet_mac;
   arp: Arp.t;
   mutable ipv4: (OS.Io_page.t -> unit Lwt.t);
-  mutable promiscuous:(t -> Cstruct.buf -> unit Lwt.t) option;
+  mutable promiscuous:( Cstruct.buf -> unit Lwt.t) option;
 }
 
 cstruct ethernet {
@@ -48,7 +48,7 @@ let input t frame =
     |etype ->
       return (printf "Ethif: unknown frame %x\n%!" etype)
   end
-  | Some(promiscuous) -> promiscuous t frame 
+  | Some(promiscuous) -> promiscuous frame 
 
 let set_promiscuous t f =
   t.promiscuous <- Some(f)
