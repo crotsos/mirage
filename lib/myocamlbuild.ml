@@ -66,7 +66,8 @@ module Spec = struct
 
   (* The modules to copy into std/ are specified as (<dest file in std/> * "<subdirectory>/<file>") *)
   let modules =
-    let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "openflow"; "oUnit"; "fs" ] in
+    let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "openflow"; "ograph";
+		    "oUnit"; "trafficGen"; "fs" ] in
 (*     let baselibs = ["regexp"; "dns"; "http"; "dyntype"; "cow"; "oUnit"; "fs"
  *     ] in *)
     let libs = List.map (fun lib -> lib, (ps "%s/%s" lib lib)) baselibs in
