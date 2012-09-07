@@ -55,7 +55,7 @@ using namespace std;
 using namespace ns3;
 
 #ifndef USE_MPI
-#define USE_MPI 1
+#define USE_MPI 0
 #endif
 
 NS_LOG_COMPONENT_DEFINE ("MirageExample");
@@ -320,8 +320,10 @@ addNs3Node(string name) {
   NodeContainer node;
 
 #if USE_MPI 
+  printf("using mpi\n");
   node.Create(1, node_count);
 #else 
+  printf("not using mpi\n");
   node.Create(1);
 #endif
   // add in the last hashmap
@@ -520,6 +522,7 @@ ocaml_ns3_run(value v_duration) {
   CAMLparam1(v_duration);
   int duration = Int_val(v_duration);
 
+#if USE_MPI
   // for each host I need a signle process 
   if (MpiInterface::GetSize() < nodes.size()) {
     char msg[2048];
@@ -528,6 +531,7 @@ ocaml_ns3_run(value v_duration) {
     NS_FATAL_ERROR(msg);
     exit(1);
   }
+#endif
 
   // Configure the logging functionality
   // LogComponentEnable ("TapBridge", LOG_LEVEL_LOGIC);

@@ -23,7 +23,7 @@ let resolve t = Lwt.on_success t (fun _ -> ())
 
 type t = {
   id: id;
-  fd_read : (int * Io_page.t) Lwt_condition.t;
+  fd_read : Io_page.t Lwt_condition.t;
   fd_read_ret : unit Lwt_condition.t;
   fd_write : unit Lwt_condition.t;
   mutable active: bool;
@@ -72,8 +72,9 @@ let demux_pkt node_name dev_id frame =
     let pkt = Io_page.get () in 
     let pkt_len = (String.length frame) in
     let _ = (Cstruct.set_buffer frame 0 pkt 0 pkt_len) in
+    let pkt = Cstruct.sub pkt 0 pkt_len in 
     
-    let _ = Lwt_condition.signal dev.fd_read  (pkt_len, pkt) in
+    let _ = Lwt_condition.signal dev.fd_read pkt in
     let _ = resolve (Lwt_condition.wait dev.fd_read_ret) in
     let _ = Lwt.wakeup_all () in
     let _ = Lwt.wakeup_all () in
@@ -134,7 +135,7 @@ let rec listen t fn =
   |true ->
     lwt _ = 
       try_lwt 
-        lwt (len, frame) = Lwt_condition.wait t.fd_read in
+        lwt frame = Lwt_condition.wait t.fd_read in
         lwt _ = fn frame in
         let _ = Lwt_condition.signal t.fd_read_ret in
           return ()
