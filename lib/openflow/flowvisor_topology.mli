@@ -14,12 +14,15 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-open Lwt
-open Net
 open Net.Nettypes
 
 type t 
 
-val listen: t -> Manager.t ->  ipv4_src -> 
-  (t -> unit Lwt.t) -> unit Lwt.t
-val create_flowvisor: unit -> t
+val init_topology: unit -> t
+val add_port: t -> int64 -> int -> ethernet_mac -> unit Lwt.t
+val add_channel: t -> int64 -> Controller.t -> unit
+val discover: t-> unit Lwt.t
+val process_lldp_packet: t -> int64 -> int -> Cstruct.buf -> unit
+val find_dpid_path: t -> int64 -> int64 -> (int64 * int * int) list
+val remove_dpid: t -> int64 -> unit
+

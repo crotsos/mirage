@@ -28,7 +28,7 @@ module Event :
       | TABLE_STATS_REPLY
       | PORT_STATUS_CHANGE
     type e =
-        Datapath_join of Ofpacket.datapath_id
+        Datapath_join of Ofpacket.datapath_id * Ofpacket.Port.phy list 
       | Datapath_leave of Ofpacket.datapath_id
       | Packet_in of Ofpacket.Port.t * int32 * Cstruct.buf * 
           Ofpacket.datapath_id

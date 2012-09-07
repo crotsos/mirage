@@ -37,7 +37,7 @@ module Event = struct
     | PORT_STATS_REPLY | TABLE_STATS_REPLY | PORT_STATUS_CHANGE 
 
   type e = 
-    | Datapath_join of OP.datapath_id
+    | Datapath_join of OP.datapath_id * OP.Port.phy list 
     | Datapath_leave of OP.datapath_id
     | Packet_in of OP.Port.t * int32 * Cstruct.buf * OP.datapath_id
     | Flow_removed of
@@ -53,7 +53,7 @@ module Event = struct
     | Port_status of OP.Port.reason * OP.Port.phy * OP.datapath_id
 
   let string_of_event = function
-    | Datapath_join dpid -> sp "Datapath_join: dpid:0x%012Lx" dpid
+    | Datapath_join (dpid, _) -> sp "Datapath_join: dpid:0x%012Lx" dpid
     | Datapath_leave dpid -> sp "Datapath_leave: dpid:0x%012Lx" dpid
     | Packet_in (port, buffer_id, bs, dpid) 
       -> (sp "Packet_in: port:%s ... dpid:0x%012Lx buffer_id:%ld" 
@@ -171,7 +171,7 @@ let process_of_packet state (remote_addr, remote_port) ofp t =
       | Features_resp (h, sfs) (* Generate a datapath join event *)
         -> ((* cp "FEATURES_RESP";*)
             let dpid = sfs.Switch.datapath_id in
-            let evt = Event.Datapath_join dpid in
+            let evt = Event.Datapath_join (dpid, sfs.Switch.ports) in
             if (Hashtbl.mem state.dp_db dpid) then (
               Printf.printf "Deleting old state \n%!";
               Hashtbl.remove state.dp_db dpid;
@@ -296,11 +296,10 @@ let terminate st =
   Hashtbl.iter (fun _ ch -> resolve (Channel.close ch) ) st.dp_db;
   Printf.printf "Terminating controller...\n"
    
-let controller init st (remote_addr, remote_port) t =
+let controller st (remote_addr, remote_port) t =
   let rs = Nettypes.ipv4_addr_to_string remote_addr in
   let cached_socket = Ofsocket.create_socket t in 
   Log.info "OpenFlow Controller" "+ %s:%d" rs remote_port;  
-  let _ = init st in 
   let echo () =
     try_lwt 
       lwt hbuf = Ofsocket.read_data cached_socket OP.Header.sizeof_ofp_header in
@@ -358,7 +357,8 @@ let listen mgr loc init =
              port_status_cb           = [];
            } 
   in
-    (Channel.listen mgr (`TCPv4 (loc, (controller init st) ))) 
+  let _ = init st in 
+    (Channel.listen mgr (`TCPv4 (loc, (controller st) ))) 
 
 let connect mgr loc init = 
   let st = { dp_db                    = Hashtbl.create 0; 
@@ -375,5 +375,6 @@ let connect mgr loc init =
              port_status_cb           = [];
            } 
   in
+  let _ = init st in 
     Net.Channel.connect mgr (`TCPv4 (None, loc, 
-      (controller init st loc) ))
+      (controller st loc) ))

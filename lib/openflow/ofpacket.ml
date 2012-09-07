@@ -883,6 +883,12 @@ module Match = struct
       nw_src; nw_dst; nw_tos; nw_proto; tp_src; tp_dst; 
     }
 
+  let translate_port m p = 
+    {wildcards=m.wildcards; in_port=p; dl_src=m.dl_src; dl_dst=m.dl_dst;
+     dl_vlan=m.dl_vlan; dl_vlan_pcp=m.dl_vlan_pcp; dl_type=m.dl_type; 
+     nw_tos=m.nw_tos; nw_proto=m.nw_proto; nw_src=m.nw_src; nw_dst=m.nw_dst;
+     tp_src=m.tp_src; tp_dst=m.tp_dst;} 
+
   cstruct dl_header {
     uint8_t   dl_dst[6];
     uint8_t   dl_src[6]; 
@@ -1867,14 +1873,17 @@ module Stats = struct
                       Match.sizeof_ofp_match +
                       sizeof_ofp_flow_stats_request ) 
                      xid in 
-    let _ = Header.marshal_header header bits in 
+    let _ = Header.marshal_header header bits in
+    let bits = Cstruct.shift bits Header.sizeof_ofp_header in 
     let _ = set_ofp_stats_request_typ bits (int_of_req_type FLOW) in 
     let _ = set_ofp_stats_request_flags bits 0 in 
-    let _ = Cstruct.shift bits sizeof_ofp_stats_request in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = Match.marshal_match flow_match bits in 
+    let bits = Cstruct.shift bits Match.sizeof_ofp_match in 
     let _ = set_ofp_flow_stats_request_table_id bits table_id in 
     let _ = set_ofp_flow_stats_request_out_port bits (Port.int_of_port out_port) in 
-      Cstruct.shift bits sizeof_ofp_flow_stats_request
+      Header.sizeof_ofp_header + sizeof_ofp_stats_request + 
+      Match.sizeof_ofp_match + sizeof_ofp_flow_stats_request
 
   let create_aggr_flow_stat_req flow_match ?(table_id=0xff) ?(out_port=Port.No_port) 
       ?(xid=(Random.int32 Int32.max_int)) bits = 
@@ -1885,13 +1894,16 @@ module Stats = struct
                       sizeof_ofp_flow_stats_request ) 
                      xid in 
     let _ = Header.marshal_header header bits in 
+    let bits = Cstruct.shift bits Header.sizeof_ofp_header in 
     let _ = set_ofp_stats_request_typ bits (int_of_req_type AGGREGATE) in 
     let _ = set_ofp_stats_request_flags bits 0 in 
-    let _ = Cstruct.shift bits sizeof_ofp_stats_request in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = Match.marshal_match flow_match bits in 
+    let bits = Cstruct.shift bits Match.sizeof_ofp_match in 
     let _ = set_ofp_flow_stats_request_table_id bits table_id in 
     let _ = set_ofp_flow_stats_request_out_port bits (Port.int_of_port out_port) in 
-      Cstruct.shift bits sizeof_ofp_flow_stats_request
+      Header.sizeof_ofp_header + sizeof_ofp_stats_request + 
+      Match.sizeof_ofp_match + sizeof_ofp_flow_stats_request
 
 (*  struct ofp_vendor_header {
     uint32_t vendor;         
@@ -1906,9 +1918,10 @@ module Stats = struct
                      (Header.sizeof_ofp_header + 
                       sizeof_ofp_stats_request) xid in 
     let _ = Header.marshal_header header bits in 
+    let bits = Cstruct.shift bits Header.sizeof_ofp_header in 
     let _ = set_ofp_stats_request_typ bits (int_of_req_type TABLE) in 
     let _ = set_ofp_stats_request_flags bits 0 in
-      Cstruct.shift bits sizeof_ofp_stats_request
+      Header.sizeof_ofp_header + sizeof_ofp_stats_request
 
   cstruct ofp_queue_stats_request {
     uint16_t port_no;
@@ -1923,12 +1936,14 @@ module Stats = struct
                       sizeof_ofp_stats_request + 
                       sizeof_ofp_queue_stats_request) xid in 
     let _ = Header.marshal_header header bits in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = set_ofp_stats_request_typ bits (int_of_req_type QUEUE) in 
     let _ = set_ofp_stats_request_flags bits 0 in
-    let _ = Cstruct.shift bits sizeof_ofp_stats_request in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = set_ofp_queue_stats_request_port_no bits (Port.int_of_port port) in 
     let _ = set_ofp_queue_stats_request_queue_id bits queue_id in 
-      Cstruct.shift bits sizeof_ofp_queue_stats_request
+      Header.sizeof_ofp_header + sizeof_ofp_stats_request + 
+      sizeof_ofp_queue_stats_request
 
   cstruct ofp_port_stats_request {
     uint16_t port_no;        
@@ -1942,11 +1957,13 @@ module Stats = struct
                       sizeof_ofp_stats_request + 
                       sizeof_ofp_port_stats_request) xid in 
     let _ = Header.marshal_header header bits in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = set_ofp_stats_request_typ bits (int_of_req_type PORT) in 
     let _ = set_ofp_stats_request_flags bits 0 in
-    let _ = Cstruct.shift bits sizeof_ofp_stats_request in 
+    let bits = Cstruct.shift bits sizeof_ofp_stats_request in 
     let _ = set_ofp_port_stats_request_port_no bits (Port.int_of_port port) in 
-      Cstruct.shift bits sizeof_ofp_port_stats_request
+      Header.sizeof_ofp_header + sizeof_ofp_stats_request + 
+      sizeof_ofp_port_stats_request
 
   type req = 
     | Desc_req of req_hdr

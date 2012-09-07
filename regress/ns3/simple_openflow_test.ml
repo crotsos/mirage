@@ -140,7 +140,7 @@ let switch_data =
 let datapath_join_cb controller dpid evt =
   let dp = 
     match evt with
-      | OE.Datapath_join c -> c
+      | OE.Datapath_join (c, _) -> c
       | _ -> invalid_arg "bogus datapath_join event match!" 
   in
   switch_data.dpid <- switch_data.dpid @ [dp];
@@ -221,25 +221,10 @@ let controller_inner () =
   with exn -> 
     return (printf "%f: controller error: %s\n%!" (Clock.time ()) 
             (Printexc.to_string exn))
+
 (****************************************************************
  * OpenFlow Switch configuration 
  *****************************************************************)
-(*let switch_plug sw t id vif =
-  (*
-   * the first vif will be the controller - switch channel, so need
-   * to setup a proper ip stack and assign ip addresses
-   **)
-    Manager.plug t id vif 
-  | _ -> begin
-    (*
-     * For the rest of the interfaces, create an ethif threads 
-     * and initialize only the ethif thread with an interception 
-     * method.
-     * *)
-    let (netif, netif_t) = Ethif.create vif in
-    let _ = Openflow.Ofswitch.add_port sw netif in  
-      return ()
-  end *)
 
 let print_time () =
   while_lwt true do
@@ -248,7 +233,7 @@ let print_time () =
   done
 
 let switch_inner () = 
-  let sw = Openflow.Ofswitch.create_switch () in
+  let sw = Openflow.Ofswitch.create_switch 1L in
   try_lwt 
     Manager.create 
     (fun mgr interface id ->

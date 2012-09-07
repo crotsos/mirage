@@ -141,6 +141,6 @@ let run_inner () =
 
 (* Design the topology *)
 let run () =
-  Time.set_duration 60;
+  Time.set_duration 30;
   OS.Topology.add_node "node1" run_inner;
   OS.Topology.add_external_dev "nstap0" "node1" "10.0.1.1" "255.255.255.0"

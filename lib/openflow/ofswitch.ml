@@ -299,8 +299,8 @@ module Switch = struct
  let supported_capabilities () = 
    OP.Switch.({flow_stats=true;table_stats=true;port_stats=true;stp=true;
    ip_reasm=false;queue_stats=false;arp_match_ip=true;})
- let switch_features () = 
-   OP.Switch.({datapath_id=1L; n_buffers=0l; n_tables=(char_of_int 1); 
+ let switch_features dpid = 
+   OP.Switch.({datapath_id=dpid; n_buffers=0l; n_tables=(char_of_int 1); 
    capabilities=(supported_capabilities ()); actions=(supported_actions ()); 
    ports=[];})
 
@@ -505,11 +505,11 @@ let process_frame_inner st intf frame =
 
     (* What is the size of the frame? Need to get sub_buffer in order  to
      * process it *)
-    let frame = 
+(*    let frame = 
       match (Switch.size_of_raw_packet frame) with
       | Some(len) -> Cstruct.sub_buffer frame 0 len
       | None -> raise Packet_type_unknw
-    in 
+    in *)
      (* Lookup packet flow to existing flows in table *)
      let entry = (Switch.lookup_flow st tupple) in 
      match entry with 
@@ -860,18 +860,17 @@ let add_port mgr sw ethif =
   let _ = Net.Manager.set_promiscuous mgr ethif (process_frame_inner sw) in
     ()
 
-let create_switch () = 
+let create_switch id = 
   let (packet_queue, push_packet) = Lwt_stream.create () in
   Switch.(
     { ports = []; int_to_port = (Hashtbl.create 64); dev_to_port=(Hashtbl.create 64); 
       p_sflow = 0_l; controllers=[]; errornum = 0l; portnum=0; packet_queue; push_packet; 
       queue_len = 0; stats={n_frags=0L; n_hits=0L;n_missed=0L;n_lost=0L;};
-    table = (Table.init_table ()); features=(Switch.switch_features ()); 
+    table = (Table.init_table ()); features=(Switch.switch_features id); 
     packet_buffer=[]; packet_buffer_id=0l};)
 
 let listen st mgr loc =
   Channel.listen mgr (`TCPv4 (loc, (control_channel st))) <&> (data_plane st ())
 
-let connect st mgr loc init =
-  init mgr st; 
-  Channel.listen mgr (`TCPv4 (loc, (control_channel st))) <&> (data_plane st ())
+let connect st mgr loc =
+  Channel.connect mgr (`TCPv4 (None, loc, (control_channel st loc))) <&> (data_plane st ())
