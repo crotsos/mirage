@@ -47,10 +47,19 @@ cstruct arp {
   uint32_t tpa
 } as big_endian
 
+(*
 cenum op {
   Op_request = 1;
   Op_reply
 } as uint16_t
+
+*)
+type op = 
+   | Op_request
+   | Op_reply
+let op_to_int = function
+   | Op_request -> 1
+   | Op_reply -> 2
 
 (* Prettyprint cache contents *)
 let prettyprint t =

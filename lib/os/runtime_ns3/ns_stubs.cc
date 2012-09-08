@@ -16,7 +16,8 @@
 
 #include <iostream>
 #include <fstream>
-#include <linux/if_tun.h>
+// #include <net/if.h>
+// #include <linux/if_tun.h>
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -26,7 +27,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <err.h>
-#include <net/if.h>
 #include <sys/ioctl.h>
 
 #include <arpa/inet.h>
@@ -44,7 +44,11 @@
 #include <caml/mlvalues.h>
 #include <caml/fail.h>
 
+#if defined __GNUC__ || defined __APPLE__
+#include <ext/hash_map>
+#else
 #include <hash_map>
+#endif
 
 using namespace std;
 using namespace ns3;
@@ -86,7 +90,7 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
  */
 
 map<string, Ptr<Node> > nodes;
-bool tap_opendev(string intf, string ip, string mask);
+// bool tap_opendev(string intf, string ip, string mask);
 
 
 void 
@@ -360,7 +364,7 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
   tapBridge.SetAttribute ("DeviceName", StringValue (intf));
   Ptr< NetDevice > tapDev = tapBridge.Install (nodes[intf], 
       devices.Get(1));
-  tap_opendev(intf, ip, mask );
+  // tap_opendev(intf, ip, mask );
 
   CAMLreturn ( Val_unit );
 }
@@ -369,7 +373,7 @@ ns3_add_net_intf(value ocaml_intf, value ocaml_node,
 /* 
  * Configure a tun/tap intf, so we avoid having an internet stack
  * */
-bool
+/* bool
 tap_opendev(string intf, string ip, string mask) {
   char dev[IFNAMSIZ];
   char buf[4096];
@@ -387,7 +391,7 @@ tap_opendev(string intf, string ip, string mask) {
   fprintf(stderr, "tap_opendev: %s\n", dev);
   // return Val_int(fd);
   return true;
-}
+} */
 
 
 /*
