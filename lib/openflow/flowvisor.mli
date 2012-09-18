@@ -23,3 +23,5 @@ type t
 val listen: t -> Manager.t ->  ipv4_src -> 
   (t -> unit Lwt.t) -> unit Lwt.t
 val create_flowvisor: unit -> t
+val remove_slice : t -> Ofpacket.Match.t ->  unit Lwt.t
+val add_slice : t -> Ofpacket.Match.t -> ipv4_dst -> unit Lwt.t

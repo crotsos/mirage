@@ -482,10 +482,14 @@ let process_switch_channel flv st dpid e =
           return ()
     | OE.Datapath_leave(dpid) ->
         let _ = Flowvisor_topology.remove_dpid flv.flv_topo dpid in
-          return ()
+        (* Need to remove ports and port mapping and disard any state pending 
+         * for replies. *)  
+         return ()
     | OE.Flow_removed(of_m, r, dur_s, dur_ns, pkts, bytes, dpid) -> 
+          (* Send packet to all controllers *)
         return ()
     | OE.Flow_stats_reply(xid, more, flows, dpid) ->
+          (* Group reply separation *)
         return ()
     | OE.Aggr_flow_stats_reply(xid, pkts, bytes, flows, dpid) -> 
         return ()
@@ -494,6 +498,7 @@ let process_switch_channel flv st dpid e =
     | OE.Table_stats_reply(xid, tables, dpid) -> 
         return ()
     | OE.Port_status(reason, port, dpid) -> 
+          (* send a port withdrawal to all controllers *)
         return ()
     | _ -> return (pp "Unsupported event on controller channel...\n%!")
 
@@ -533,4 +538,5 @@ let listen st mgr loc flv_init =
      Controller.listen mgr loc (init st) <&> 
 (*       controller_channel mgr st <&> *)
       Flowvisor_topology.discover st.flv_topo
-
+let remove_slice _ _ = return ()
+let add_slice _ _ _ = return ()
