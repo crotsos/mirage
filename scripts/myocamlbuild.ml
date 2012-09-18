@@ -25,7 +25,7 @@ open Printf
 (* Points to the root of the installed Mirage stdlibs *)
 let home = getenv ~default:"/usr/bin" "HOME"
 let lib = getenv ~default:(home / "mir-inst") "MIRAGELIB"
-let cc = getenv ~default:"cc" "CC"
+let cc = getenv ~default:"g++" "g++"
 let ld = getenv ~default:"ld" "LD"
 let profiling = false
 
@@ -123,18 +123,24 @@ module Mir = struct
       |false,false -> A"-lasmrun"
     in
     let dl_libs = match host with
-    |Linux -> [A"-L/usr/local/lib/"; A"-lns3-dev-applications";
-               A"-lns3-dev-core"; A"-lns3-dev-csma"; A"-lns3-dev-internet"; 
-               A"-lns3-dev-network"; A"-lns3-dev-virtual-net-device"; A"-lgsl";
+    |Linux -> [A"-L/usr/local/lib/"; A"-lns3-dev-applications-debug";
+               A"-lns3-dev-core-debug"; A"-lns3-dev-internet-debug"; 
+               A"-lns3-dev-network-debug"; A"-lns3-dev-mirage-debug";
+               A"-lns3-dev-virtual-net-device-debug"; A"-lgsl";
                A"-lgslcblas"; A"-lgtk-x11-2.0"; A"-lgdk-x11-2.0"; A"-latk-1.0";
                A"-lgio-2.0"; A"-lpangoft2-1.0"; A"-lgdk_pixbuf-2.0";
                A"-lpangocairo-1.0"; A"-lcairo"; A"-lpango-1.0"; A"-lfreetype";
                A"-lfontconfig"; A"-lgobject-2.0"; A"-lgmodule-2.0";
-               A"-lglib-2.0"; A"-lxml2";  A"-lunix"; A"-lasmrunp"; (*
-               A"-lcamlrun_shared";  *)
-               A"-lm"; (* asmlib; *) A"-lbigarray"; A"-lcamlstr"; 
+               A"-lglib-2.0"; A"-lxml2";  A"-lunix"; A"-lasmrunp"; 
+               A"-lm"; A"-lbigarray"; A"-lcamlstr"; 
                A"-ldl"; A"-ltermcap"]
-      |Darwin |FreeBSD -> [A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ltermcap"] in
+      |Darwin |FreeBSD -> [
+         A"-L/usr/local/lib/";
+         A"-lns3-dev-tap-bridge-debug"; A"-lns3-dev-point-to-point-debug";
+         A"-lns3-dev-core-debug"; A"-lns3-dev-mirage-debug"; 
+         A"-lns3-dev-network-debug"; 
+         A"-lgsl"; A"-lgslcblas"; A"-lunix"; A"-lasmrunp";
+         A"-lm"; asmlib; A"-lbigarray"; A"-lcamlstr"; A"-ltermcap"] in
     let tags = tags++"cc"++"c" in
     let prof = if profiling then [A"-pg"] else [] in
     Cmd (S (A cc :: [ T(tags++"link"); A ocamlc_libdir; A"-o"; Px out; 
@@ -198,7 +204,11 @@ module Mir = struct
       let acc = ref 0 in
       let mods = List.map (fun m -> incr acc; sprintf "module ForceLink%d = %s" !acc m) mods in
       (* TODO: this value is static, need to extend it *)
-      let main = sprintf "OS.Topology.load (%s )" main in
+      let main = 
+        match (env "%(backend)") with
+          | "ns3" -> sprintf "OS.Topology.load (%s )" main 
+          | _ -> sprintf "let _ = OS.Main.run (%s ())" main 
+      in
       Util.safe_echo (mods @ [main]) mlprod
     |[] -> failwith "empty .mir file"
 

@@ -60,10 +60,19 @@ cstruct dhcp {
   uint32_t cookie
 } as big_endian
 
+(*
 cenum mode {
   BootRequest = 1;
   BootReply
 } as uint8_t
+
+*)
+type mode = 
+   | BootRequest
+   | BootReply
+let mode_to_int = function
+   | BootRequest -> 1
+   | BootReply -> 2
 
 (* Send a client broadcast packet *)
 let output_broadcast t ~xid ~yiaddr ~siaddr ~options =

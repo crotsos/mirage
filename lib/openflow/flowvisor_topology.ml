@@ -183,6 +183,6 @@ let remove_dpid t dpid =
     ()
 
 let find_dpid_path t src_dpid dst_dpid =
-  let path = shortest_path src_dpid dst_dpid in 
+(*   let path = shortest_path src_dpid dst_dpid in  *)
 
   []

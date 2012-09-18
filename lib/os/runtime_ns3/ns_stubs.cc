@@ -16,7 +16,8 @@
 
 #include <iostream>
 #include <fstream>
-#include <linux/if_tun.h>
+// #include <net/if.h>
+// #include <linux/if_tun.h>
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -26,7 +27,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <err.h>
-#include <net/if.h>
 #include <sys/ioctl.h>
 
 #include <arpa/inet.h>
@@ -45,11 +45,14 @@
 #include <caml/mlvalues.h>
 #include <caml/fail.h>
 
+#if defined __GNUC__ || defined __APPLE__
+#include <ext/hash_map>
+#else
 #include <hash_map>
+#endif
 
-//#include <ns3/mirage-module.h>
-#include <mirage_queue.h>
-#include <mirage_queue.cc>
+#include <ns3/mirage-module.h>
+// #include <mirage_queue.cc>
 
 using namespace std;
 using namespace ns3;
@@ -125,6 +128,9 @@ struct caml_cb *ns3_cb = NULL;
 /*
  * Util functions
  */
+// bool tap_opendev(string intf, string ip, string mask);
+
+
 void 
 hexdump(uint8_t *buf, int len) {
   int p = 0;
@@ -407,13 +413,10 @@ ocaml_ns3_add_link_native(value ocaml_node_a, value ocaml_node_b, value v_rate,
   CAMLreturn ( Val_unit );
 }
 
-/*
- * methods to configure an external interface to receive packets in the
- * simulation.
- */
-// Configure a tun/tap intf, so we avoid having an internet stack
-// ns3 module installed
-bool
+/* 
+ * Configure a tun/tap intf, so we avoid having an internet stack
+ * */
+/* bool
 tap_opendev(string intf, string ip, string mask) {
   char dev[IFNAMSIZ];
   char buf[4096];
@@ -430,7 +433,7 @@ tap_opendev(string intf, string ip, string mask) {
   fprintf(stderr, "tap_opendev: %s\n", dev);
   // return Val_int(fd);
   return true;
-}
+} */
 
 CAMLprim value
 ns3_add_net_intf(value v_intf, value v_node,
@@ -476,7 +479,7 @@ ns3_add_net_intf(value v_intf, value v_node,
       node_intf->GetDevice(0));
 
   //create the tap/tun interface
-  tap_opendev(intf, ip, mask );
+  //tap_opendev(intf, ip, mask );
 
   CAMLreturn ( Val_unit );
 }

@@ -148,7 +148,7 @@ module Header = struct
     uint32_t xid
   } as big_endian
 
-  cenum msg_code {
+  (*cenum msg_code {
     HELLO                 =  0;
     ERROR                 =  1;
     ECHO_REQ              =  2;
@@ -171,8 +171,107 @@ module Header = struct
     BARRIER_RESP          = 19;
     QUEUE_GET_CONFIG_REQ  = 20;
     QUEUE_GET_CONFIG_RESP = 21
-  } as uint8_t
-
+  } as uint8_t *)
+    type msg_code =
+      HELLO
+      | ERROR
+      | ECHO_REQ
+      | ECHO_RESP
+      | VENDOR
+      | FEATURES_REQ
+      | FEATURES_RESP
+      | GET_CONFIG_REQ
+      | GET_CONFIG_RESP
+      | SET_CONFIG
+      | PACKET_IN
+      | FLOW_REMOVED
+      | PORT_STATUS
+      | PACKET_OUT
+      | FLOW_MOD
+      | PORT_MOD
+      | STATS_REQ
+      | STATS_RESP
+      | BARRIER_REQ
+      | BARRIER_RESP
+      | QUEUE_GET_CONFIG_REQ
+      | QUEUE_GET_CONFIG_RESP
+    
+    let msg_code_of_int =
+      function
+      | 0 -> Some HELLO
+      | 1 -> Some ERROR
+      | 2 -> Some ECHO_REQ
+      | 3 -> Some ECHO_RESP
+      | 4 -> Some VENDOR
+      | 5 -> Some FEATURES_REQ
+      | 6 -> Some FEATURES_RESP
+      | 7 -> Some GET_CONFIG_REQ
+      | 8 -> Some GET_CONFIG_RESP
+      | 9 -> Some SET_CONFIG
+      | 10 -> Some PACKET_IN
+      | 11 -> Some FLOW_REMOVED
+      | 12 -> Some PORT_STATUS
+      | 13 -> Some PACKET_OUT
+      | 14 -> Some FLOW_MOD
+      | 15 -> Some PORT_MOD
+      | 16 -> Some STATS_REQ
+      | 17 -> Some STATS_RESP
+      | 18 -> Some BARRIER_REQ
+      | 19 -> Some BARRIER_RESP
+      | 20 -> Some QUEUE_GET_CONFIG_REQ
+      | 21 -> Some QUEUE_GET_CONFIG_RESP
+      | _ -> None
+      
+    let msg_code_to_int =
+      function
+      | HELLO -> 0
+      | ERROR -> 1
+      | ECHO_REQ -> 2
+      | ECHO_RESP -> 3
+      | VENDOR -> 4
+      | FEATURES_REQ -> 5
+      | FEATURES_RESP -> 6
+      | GET_CONFIG_REQ -> 7
+      | GET_CONFIG_RESP -> 8
+      | SET_CONFIG -> 9
+      | PACKET_IN -> 10
+      | FLOW_REMOVED -> 11
+      | PORT_STATUS -> 12
+      | PACKET_OUT -> 13
+      | FLOW_MOD -> 14
+      | PORT_MOD -> 15
+      | STATS_REQ -> 16
+      | STATS_RESP -> 17
+      | BARRIER_REQ -> 18
+      | BARRIER_RESP -> 19
+      | QUEUE_GET_CONFIG_REQ -> 20
+      | QUEUE_GET_CONFIG_RESP -> 21
+      
+    let msg_code_to_string =
+      function
+      | HELLO -> "HELLO"
+      | ERROR -> "ERROR"
+      | ECHO_REQ -> "ECHO_REQ"
+      | ECHO_RESP -> "ECHO_RESP"
+      | VENDOR -> "VENDOR"
+      | FEATURES_REQ -> "FEATURES_REQ"
+      | FEATURES_RESP -> "FEATURES_RESP"
+      | GET_CONFIG_REQ -> "GET_CONFIG_REQ"
+      | GET_CONFIG_RESP -> "GET_CONFIG_RESP"
+      | SET_CONFIG -> "SET_CONFIG"
+      | PACKET_IN -> "PACKET_IN"
+      | FLOW_REMOVED -> "FLOW_REMOVED"
+      | PORT_STATUS -> "PORT_STATUS"
+      | PACKET_OUT -> "PACKET_OUT"
+      | FLOW_MOD -> "FLOW_MOD"
+      | PORT_MOD -> "PORT_MOD"
+      | STATS_REQ -> "STATS_REQ"
+      | STATS_RESP -> "STATS_RESP"
+      | BARRIER_REQ -> "BARRIER_REQ"
+      | BARRIER_RESP -> "BARRIER_RESP"
+      | QUEUE_GET_CONFIG_REQ -> "QUEUE_GET_CONFIG_REQ"
+      | QUEUE_GET_CONFIG_RESP -> "QUEUE_GET_CONFIG_RESP"
+ 
   type h = {
     ver: uint8;
     ty: msg_code;
@@ -507,12 +606,23 @@ module Port = struct
           h.rx_frame_err h.rx_over_err h.rx_crc_err h.collisions
           (string_of_port_stats_reply q))
 
-  cenum reason {
+(*  cenum reason {
     ADD = 0;
     DEL = 1;
     MOD = 2
-  } as uint8_t
+  } as uint8_t*)
 
+    type reason = ADD | DEL | MOD
+    
+    let reason_of_int =
+      function | 0 -> Some ADD | 1 -> Some DEL | 2 -> Some MOD | _ -> None
+      
+    let reason_to_int = function | ADD -> 0 | DEL -> 1 | MOD -> 2
+      
+    let reason_to_string =
+      function | ADD -> "ADD" | DEL -> "DEL" | MOD -> "MOD"
+      
+ 
 (*  type reason = ADD | DEL | MOD
   let reason_of_int = function
     | 0 -> ADD
