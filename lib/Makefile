@@ -18,7 +18,7 @@ endif
 UNIX_BUILD= unix-direct unix-socket
 NS3_BUILD=ns3-direct
 
-all: $(NS3_BUILD) $(XEN_BUILD)
+all: $(NS3_BUILD) xen
 	@ :
 
 doc:

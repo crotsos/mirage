@@ -107,7 +107,7 @@ function assemble_bin {
 }
 
 assemble_syntax
-#assemble_xen
+assemble_xen
 #assemble_unix "direct"
 #assemble_unix "socket"
 assemble_ns3 "direct"
