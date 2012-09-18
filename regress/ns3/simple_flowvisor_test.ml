@@ -80,7 +80,7 @@ let flowvisor_inner () =
               ipv4_addr_of_tuple (255l,255l,255l,0l), [])) in  
          lwt _ = Manager.configure interface (`IPv4 ip) in
            match id with
-             | "1" -> 
+             | "3" -> 
                  lwt _ = (Openflow.Flowvisor.listen sw mgr 
                            (None, 6633) init_slice) <&> 
                        (print_time ()) in
@@ -98,17 +98,17 @@ let run () =
   (* Define participating nodes *)
   let _ = Topology.add_node "switch1" (switch_inner 0) in 
   let _ = Topology.add_node "switch2" (switch_inner 1) in 
-  (*let _ = Topology.add_node "switch3" (switch_inner 2) in 
-  let _ = Topology.add_node "switch4" (switch_inner 3) in *)
+  let _ = Topology.add_node "switch3" (switch_inner 2) in 
+  let _ = Topology.add_node "switch4" (switch_inner 3) in 
   let _ = Topology.add_node "flv" flowvisor_inner in 
 
   (* Define topology *)
 (*   let _ = Topology.add_link "controller" "flv" in *)
   let _ = Topology.add_link ~rate:1000 ~pcap:true "switch1" "flv" in
   let _ = Topology.add_link ~rate:1000 ~pcap:true "switch2" "flv" in
-(*  let _ = Topology.add_link ~rate:1000 ~pcap:true "switch3" "flv" in
-  let _ = Topology.add_link ~rate:1000 ~pcap:true "switch4" "flv" in *)
+  let _ = Topology.add_link ~rate:1000 ~pcap:true "switch3" "flv" in
+  let _ = Topology.add_link ~rate:1000 ~pcap:true "switch4" "flv" in 
   let _ = Topology.add_link ~rate:1000 ~pcap:true "switch1" "switch2" in
-(*   let _ = Topology.add_link ~rate:1000 "switch2" "switch3" in *)
-(*   let _ = Topology.add_link ~rate:1000 "switch3" "switch4" in *)
+  let _ = Topology.add_link ~rate:1000 "switch2" "switch3" in 
+  let _ = Topology.add_link ~rate:1000 "switch3" "switch4" in 
     ()
