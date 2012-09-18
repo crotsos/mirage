@@ -144,6 +144,13 @@ let discover t =
         fun (dpid, port, mac) -> send_port_lldp t dpid port mac) ports  
   done 
 
+let print_graph t = 
+   Graph.iter_edges_e (
+      fun (_, (sdpid, sport, ddpid, dport, len), _) -> 
+         printf "%06Lx:%d - %06Lx:%d = %d\n%!" sdpid sport ddpid dport len 
+   ) t.topo 
+
+
 let process_lldp_packet t src_dpid src_port pkt = 
   let tlvs = parse_lldp_tlvs pkt in 
   let (Some(dst_dpid), Some(dst_port), Some(mac)) = 
@@ -169,9 +176,6 @@ let process_lldp_packet t src_dpid src_port pkt =
                 (Some(!dpid), port, mac)
           | _ -> (dpid, port, mac)
     ) tlvs (None, None, None) in 
-    let _ = pr "received dpid:%Ld, port:%d, mac:%s\n%!"
-              dst_dpid dst_port (Nettypes.ethernet_mac_to_string mac)
-    in
     let v = (src_dpid, (src_dpid, src_port, dst_dpid, dst_port, 1), dst_dpid) in
     let _ = Graph.add_edge_e t.topo v in
       ()
@@ -183,6 +187,20 @@ let remove_dpid t dpid =
     ()
 
 let find_dpid_path t src_dpid dst_dpid =
-(*   let path = shortest_path src_dpid dst_dpid in  *)
-
-  []
+   let (path, w) =  Dijkstra.shortest_path t.topo src_dpid dst_dpid in
+   let res = List.fold_right (
+      fun (sdp, (dp_1, port_1, dp_2, port_2, _), ddp) (p, curr_dp, curr_p) ->
+         let (hop, curr_dp, curr_p) = 
+            match (curr_dp) with 
+               | dp_1 -> 
+                     let hop = (curr_dp, curr_p, port_1) in 
+                        (hop, dp_2, port_2)
+               | dp_2 -> 
+                     let hop = (curr_dp, curr_p, port_2) in
+                        (hop, dp_1, port_1)
+               | _ -> 
+                     failwith (sp "Unknwk dpid %Ld" curr_dp) 
+         in 
+         ((p @ [hop]), curr_dp, curr_p)
+   ) path ([], src_dpid, -1) in 
+     []
