@@ -4,6 +4,7 @@
 *.annot
 *.o
 *.orig
+*.DS_STORE
 
 _build/
 
