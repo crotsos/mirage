@@ -1,0 +1,25 @@
+{
+ "name": "controller",
+ "children": [
+  {
+   "name": "flowvisor",
+   "children": [
+    {
+     "name": "switch-1",
+     "children": [
+      {"name": "host-1", "size": 3938},
+      {"name": "host-2", "size": 3812},
+      {"name": "host-3", "size": 743}
+     ]
+    },
+    {
+     "name": "switch-2",
+     "children": [
+      {"name": "host-4", "size": 3534},
+      {"name": "host-5", "size": 5731}
+     ]
+    }
+   ]
+  }
+ ]
+}
