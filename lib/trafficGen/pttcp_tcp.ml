@@ -332,7 +332,8 @@ let simple_server st src_port (dst_ip, dst_port) t =
         | len when (len > 1460l) -> 
             let buf = (Cstruct.sub (OS.Io_page.get ()) 0 1460) in 
             lwt _ = write_and_flush t buf in
-            let _ = update_tx_stat state 1460l in 
+            let _ = update_tx_stat state 1460l in
+            (* let _ = printf "need to send  %ld bytes\n%!" len in *)
               send_data state t (Int32.sub len 1460l)
         | len ->
             let buf = Cstruct.sub (OS.Io_page.get ()) 0 (Int32.to_int len) in 
@@ -343,8 +344,12 @@ let simple_server st src_port (dst_ip, dst_port) t =
                    "%03.6f: flow %d - finished %ld bytes (%ld pkts)\n%!"
                    (OS.Clock.time ()) state.client_id state.tx_target 
                    state.tx_pkts)
-      in 
-      lwt _ = send_data state t tx_len in
+      in
+      try_lwt 
+        lwt _ = send_data state t tx_len in
+          return (del_pttcp_state st state)
+      with er -> 
+        printf "server error: %s\n%!" (Printexc.to_string er);
         return (del_pttcp_state st state)
     done
   with exn ->
@@ -381,7 +386,7 @@ let request_data st state t =
   let _ = Cstruct.LE.set_uint32 buf 0 state.tx_target in 
   lwt _  = write_and_flush t buf in 
     while_lwt (state.tx_target > state.rx_rcvd) do
-      lwt recv = Channel.read_some t in 
+      lwt recv = Channel.read_some t in
       let _ = update_rx_stat state (Int32.of_int (Cstruct.len recv)) in
       return ()
     done
